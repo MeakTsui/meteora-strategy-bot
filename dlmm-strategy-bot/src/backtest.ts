@@ -46,10 +46,10 @@ class Backtester {
     }
 
     logger.info(
-      `Generated ${this.historicalPrices.length} historical price points`
+      `已生成 ${this.historicalPrices.length} 个历史价格数据点`
     );
     logger.info(
-      `Price range: $${Math.min(...this.historicalPrices.map((p) => p.price)).toFixed(2)} - $${Math.max(...this.historicalPrices.map((p) => p.price)).toFixed(2)}`
+      `价格区间: $${Math.min(...this.historicalPrices.map((p) => p.price)).toFixed(2)} - $${Math.max(...this.historicalPrices.map((p) => p.price)).toFixed(2)}`
     );
   }
 
@@ -57,7 +57,7 @@ class Backtester {
    * 运行回测模拟
    */
   async run(): Promise<BacktestResult> {
-    logger.info("\n🔄 Starting Backtest Simulation...\n");
+    logger.info("\n🔄 开始回测模拟...\n");
 
     // Generate historical prices
     this.generateHistoricalPrices();
@@ -197,34 +197,34 @@ class Backtester {
    */
   private logResults(result: BacktestResult): void {
     logger.info("\n" + "=".repeat(60));
-    logger.info("📊 BACKTEST RESULTS");
+    logger.info("📊 回测结果");
     logger.info("=".repeat(60));
     
-    logger.info(`\n📈 Trading Statistics:`);
-    logger.info(`  Total Trades: ${result.totalTrades}`);
-    logger.info(`  Successful Trades: ${result.successfulTrades}`);
-    logger.info(`  Success Rate: ${((result.successfulTrades / result.totalTrades) * 100).toFixed(2)}%`);
-    logger.info(`  Compound Count: ${result.compoundCount}`);
+    logger.info(`\n📈 交易统计:`);
+    logger.info(`  总交易次数: ${result.totalTrades}`);
+    logger.info(`  成功交易: ${result.successfulTrades}`);
+    logger.info(`  成功率: ${((result.successfulTrades / result.totalTrades) * 100).toFixed(2)}%`);
+    logger.info(`  复利次数: ${result.compoundCount}`);
 
-    logger.info(`\n💰 Profit & Loss:`);
-    logger.info(`  Total Profit: $${result.totalProfit.toFixed(2)}`);
-    logger.info(`  Total Fees: $${result.totalFees.toFixed(2)}`);
-    logger.info(`  Net Profit: $${(result.totalProfit - result.totalFees).toFixed(2)}`);
-    logger.info(`  Return: ${((result.totalProfit - result.totalFees) / config.totalCapital * 100).toFixed(2)}%`);
+    logger.info(`\n💰 盈亏分析:`);
+    logger.info(`  总利润: $${result.totalProfit.toFixed(2)}`);
+    logger.info(`  总手续费: $${result.totalFees.toFixed(2)}`);
+    logger.info(`  净利润: $${(result.totalProfit - result.totalFees).toFixed(2)}`);
+    logger.info(`  收益率: ${((result.totalProfit - result.totalFees) / config.totalCapital * 100).toFixed(2)}%`);
 
-    logger.info(`\n📉 Risk Metrics:`);
-    logger.info(`  Max Drawdown: ${(result.maxDrawdown * 100).toFixed(2)}%`);
-    logger.info(`  Annualized Return: ${(result.annualizedReturn * 100).toFixed(2)}%`);
+    logger.info(`\n📉 风险指标:`);
+    logger.info(`  最大回撤: ${(result.maxDrawdown * 100).toFixed(2)}%`);
+    logger.info(`  年化收益: ${(result.annualizedReturn * 100).toFixed(2)}%`);
 
-    logger.info(`\n🎯 Top Performing Ranges:`);
+    logger.info(`\n🎯 表现最佳区间:`);
     const topRanges = result.rangeResults
       .sort((a, b) => b.profit - a.profit)
       .slice(0, 5);
 
     topRanges.forEach((rangeResult, index) => {
       logger.info(
-        `  ${index + 1}. Range ${rangeResult.range.lower}-${rangeResult.range.upper}: ` +
-        `${rangeResult.trades} trades, $${rangeResult.profit.toFixed(2)} profit`
+        `  ${index + 1}. 区间 ${rangeResult.range.lower}-${rangeResult.range.upper}: ` +
+        `${rangeResult.trades} 次交易, $${rangeResult.profit.toFixed(2)} 利润`
       );
     });
 
@@ -238,7 +238,7 @@ async function main() {
     const backtester = new Backtester();
     await backtester.run();
   } catch (error) {
-    logger.error("Backtest failed:", error);
+    logger.error("回测失败:", error);
     process.exit(1);
   }
 }

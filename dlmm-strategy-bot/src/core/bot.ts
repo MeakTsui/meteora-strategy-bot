@@ -33,11 +33,11 @@ export class DLMMBot {
       isTripped: false,
     };
 
-    logger.info(`DLMM Bot initialized for pool: ${this.poolAddress}`);
-    logger.info(`Capital allocation:`);
-    logger.info(`  - Bid-Ask Strategy: $${config.totalCapital * config.mainAllocation}`);
-    logger.info(`  - Trend Strategy: $${config.totalCapital * config.trendAllocation}`);
-    logger.info(`  - Insurance Strategy: $${config.totalCapital * config.insuranceAllocation}`);
+    logger.info(`DLMM 机器人已初始化，池地址: ${this.poolAddress}`);
+    logger.info(`资金分配:`);
+    logger.info(`  - Bid-Ask 策略: $${config.totalCapital * config.mainAllocation}`);
+    logger.info(`  - 趋势策略: $${config.totalCapital * config.trendAllocation}`);
+    logger.info(`  - 保险策略: $${config.totalCapital * config.insuranceAllocation}`);
   }
 
   /**
@@ -45,20 +45,20 @@ export class DLMMBot {
    */
   async start(): Promise<void> {
     if (this.isRunning) {
-      logger.warn("Bot is already running");
+      logger.warn("机器人已在运行中");
       return;
     }
 
     this.isRunning = true;
-    logger.info("🚀 Starting DLMM Strategy Bot...");
+    logger.info("🚀 启动 DLMM 策略机器人...");
 
     if (config.enableDryRun) {
-      logger.warn("⚠️  DRY RUN MODE ENABLED - No real transactions will be sent");
+      logger.warn("⚠️  DRY RUN 模式已启用 - 不会发送真实交易");
     }
 
     // 订阅价格更新，用于调试观察价格变化
     priceService.subscribePrice((price) => {
-      logger.debug(`Price update: $${price.toFixed(2)}`);
+      logger.debug(`价格更新: $${price.toFixed(2)}`);
     });
 
     // 启动主执行循环
@@ -70,7 +70,7 @@ export class DLMMBot {
    */
   stop(): void {
     this.isRunning = false;
-    logger.info("🛑 Stopping DLMM Strategy Bot...");
+    logger.info("🛑 停止 DLMM 策略机器人...");
   }
 
   /**
@@ -82,7 +82,7 @@ export class DLMMBot {
       try {
         // 检查熔断器状态，如果已触发则等待一段时间后重置
         if (this.circuitBreaker.isTripped) {
-          logger.warn("Circuit breaker is tripped. Waiting before retry...");
+          logger.warn("熔断器已触发，等待后重试...");
           await sleep(60000); // Wait 1 minute
           this.resetCircuitBreaker();
           continue;
@@ -92,14 +92,14 @@ export class DLMMBot {
         const currentPrice = await priceService.getPrice();
         
         if (currentPrice === 0) {
-          logger.error("Failed to get valid price");
+          logger.error("获取有效价格失败");
           this.handleFailure();
           await sleep(config.checkInterval);
           continue;
         }
 
         logger.info(`\n${"=".repeat(60)}`);
-        logger.info(`Executing strategies at price: $${currentPrice.toFixed(2)}`);
+        logger.info(`执行策略，当前价格: $${currentPrice.toFixed(2)}`);
         logger.info(`${"=".repeat(60)}\n`);
 
         // 依次执行所有策略
@@ -117,7 +117,7 @@ export class DLMMBot {
         this.logStats();
 
       } catch (error) {
-        logger.error("Error in execution loop:", error);
+        logger.error("执行循环出错:", error);
         this.handleFailure();
       }
 
@@ -125,7 +125,7 @@ export class DLMMBot {
       await sleep(config.checkInterval);
     }
 
-    logger.info("Execution loop stopped");
+    logger.info("执行循环已停止");
   }
 
   /**
@@ -138,23 +138,23 @@ export class DLMMBot {
 
     try {
       // Execute Bid-Ask Strategy (Main)
-      logger.info("📊 Executing Bid-Ask Strategy...");
+      logger.info("📊 执行 Bid-Ask 策略...");
       const bidAskResults = await this.bidAskStrategy.execute(currentPrice);
       results.push(...bidAskResults);
 
       // Execute Trend Strategy
-      logger.info("📈 Executing Trend Strategy...");
+      logger.info("📈 执行趋势策略...");
       const trendResults = await this.trendStrategy.execute(currentPrice);
       results.push(...trendResults);
 
       // Execute Insurance Strategy
-      logger.info("🛡️  Executing Insurance Strategy...");
+      logger.info("🛡️  执行保险策略...");
       const insuranceResults = await this.insuranceStrategy.execute(
         currentPrice
       );
       results.push(...insuranceResults);
     } catch (error) {
-      logger.error("Error executing strategies:", error);
+      logger.error("执行策略出错:", error);
       results.push({
         success: false,
         action: "NONE",
@@ -170,11 +170,11 @@ export class DLMMBot {
    */
   private logResults(results: StrategyResult[]): void {
     if (results.length === 0) {
-      logger.info("No actions taken");
+      logger.info("未执行任何操作");
       return;
     }
 
-    logger.info("\n📋 Execution Results:");
+    logger.info("\n📋 执行结果:");
     results.forEach((result, index) => {
       const icon = result.success ? "✅" : "❌";
       logger.info(`${icon} [${index + 1}] ${result.action}: ${result.message}`);
@@ -195,24 +195,24 @@ export class DLMMBot {
     const trendStats = this.trendStrategy.getStats();
     const insuranceStats = this.insuranceStrategy.getStats();
 
-    logger.info("\n📊 Strategy Statistics:");
-    logger.info("Bid-Ask Strategy:");
-    logger.info(`  - Active Positions: ${bidAskStats.activePositions}`);
-    logger.info(`  - Deployed: $${bidAskStats.totalDeployed.toFixed(2)}`);
-    logger.info(`  - Available: $${bidAskStats.availableCapital.toFixed(2)}`);
-    logger.info(`  - Compound Count: ${bidAskStats.compoundCount}`);
+    logger.info("\n📊 策略统计:");
+    logger.info("Bid-Ask 策略:");
+    logger.info(`  - 活跃仓位: ${bidAskStats.activePositions}`);
+    logger.info(`  - 已部署: $${bidAskStats.totalDeployed.toFixed(2)}`);
+    logger.info(`  - 可用: $${bidAskStats.availableCapital.toFixed(2)}`);
+    logger.info(`  - 复利次数: ${bidAskStats.compoundCount}`);
 
-    logger.info("Trend Strategy:");
-    logger.info(`  - Active Positions: ${trendStats.activePositions}`);
-    logger.info(`  - Deployed: $${trendStats.totalDeployed.toFixed(2)}`);
-    logger.info(`  - Available: $${trendStats.availableCapital.toFixed(2)}`);
-    logger.info(`  - Trend: ${trendStats.trendDirection || "None"}`);
-    logger.info(`  - Breakouts: ${trendStats.consecutiveBreakouts}`);
+    logger.info("趋势策略:");
+    logger.info(`  - 活跃仓位: ${trendStats.activePositions}`);
+    logger.info(`  - 已部署: $${trendStats.totalDeployed.toFixed(2)}`);
+    logger.info(`  - 可用: $${trendStats.availableCapital.toFixed(2)}`);
+    logger.info(`  - 趋势: ${trendStats.trendDirection || "无"}`);
+    logger.info(`  - 突破次数: ${trendStats.consecutiveBreakouts}`);
 
-    logger.info("Insurance Strategy:");
-    logger.info(`  - Active Positions: ${insuranceStats.activePositions}`);
-    logger.info(`  - Deployed: $${insuranceStats.totalDeployed.toFixed(2)}`);
-    logger.info(`  - Available: $${insuranceStats.availableCapital.toFixed(2)}`);
+    logger.info("保险策略:");
+    logger.info(`  - 活跃仓位: ${insuranceStats.activePositions}`);
+    logger.info(`  - 已部署: $${insuranceStats.totalDeployed.toFixed(2)}`);
+    logger.info(`  - 可用: $${insuranceStats.availableCapital.toFixed(2)}`);
 
     const totalDeployed =
       bidAskStats.totalDeployed +
@@ -223,9 +223,9 @@ export class DLMMBot {
       trendStats.availableCapital +
       insuranceStats.availableCapital;
 
-    logger.info("Overall:");
-    logger.info(`  - Total Deployed: $${totalDeployed.toFixed(2)} (${((totalDeployed / config.totalCapital) * 100).toFixed(1)}%)`);
-    logger.info(`  - Total Available: $${totalAvailable.toFixed(2)} (${((totalAvailable / config.totalCapital) * 100).toFixed(1)}%)`);
+    logger.info("总体:");
+    logger.info(`  - 总已部署: $${totalDeployed.toFixed(2)} (${((totalDeployed / config.totalCapital) * 100).toFixed(1)}%)`);
+    logger.info(`  - 总可用: $${totalAvailable.toFixed(2)} (${((totalAvailable / config.totalCapital) * 100).toFixed(1)}%)`);
   }
 
   /**
@@ -236,7 +236,7 @@ export class DLMMBot {
     this.circuitBreaker.lastFailureTime = new Date();
 
     logger.warn(
-      `Consecutive failures: ${this.circuitBreaker.consecutiveFailures}/${config.maxConsecutiveFailures}`
+      `连续失败次数: ${this.circuitBreaker.consecutiveFailures}/${config.maxConsecutiveFailures}`
     );
 
     if (
@@ -244,7 +244,7 @@ export class DLMMBot {
     ) {
       this.circuitBreaker.isTripped = true;
       logger.error(
-        "⚠️  Circuit breaker tripped! Bot will pause for 1 minute."
+        "⚠️  熔断器已触发！机器人将暂停 1 分钟。"
       );
     }
   }
@@ -255,7 +255,7 @@ export class DLMMBot {
   private resetCircuitBreaker(): void {
     this.circuitBreaker.consecutiveFailures = 0;
     this.circuitBreaker.isTripped = false;
-    logger.info("Circuit breaker reset");
+    logger.info("熔断器已重置");
   }
 
   /**

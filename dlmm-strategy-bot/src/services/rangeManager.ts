@@ -30,7 +30,7 @@ export class RangeManager {
     }
 
     logger.info(
-      `Initialized ${this.ranges.length} ranges from ${minPrice} to ${maxPrice}`
+      `已初始化 ${this.ranges.length} 个区间，从 $${minPrice} 到 $${maxPrice}`
     );
   }
 

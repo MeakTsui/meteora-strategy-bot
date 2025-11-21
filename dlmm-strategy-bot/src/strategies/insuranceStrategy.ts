@@ -25,10 +25,10 @@ export class InsuranceStrategy {
     this.allocatedCapital = config.totalCapital * config.insuranceAllocation;
     this.insuranceRanges = config.insuranceRanges;
     logger.info(
-      `Insurance Strategy initialized with $${this.allocatedCapital} capital`
+      `保险策略已初始化，资金: $${this.allocatedCapital}`
     );
     logger.info(
-      `Insurance ranges: ${this.insuranceRanges.map((r) => `${r.lower}-${r.upper}`).join(", ")}`
+      `保险区间: ${this.insuranceRanges.map((r) => `${r.lower}-${r.upper}`).join(", ")}`
     );
   }
 
@@ -141,7 +141,7 @@ export class InsuranceStrategy {
       );
 
       if (positionSize < 10) {
-        logger.warn("Insufficient capital for insurance position");
+        logger.warn("资金不足，无法创建保险仓位");
         return null;
       }
 
@@ -172,7 +172,7 @@ export class InsuranceStrategy {
       this.activePositions.set(position.id, position);
 
       logger.info(
-        `⚠️  Deployed Insurance position in crash range ${range.lower}-${range.upper} with $${positionSize}`
+        `部署保险仓位在区间 ${range.lower}-${range.upper}，资金 $${positionSize}`
       );
 
       return {
@@ -183,7 +183,7 @@ export class InsuranceStrategy {
         message: `Activated insurance position in crash range ${range.lower}-${range.upper}`,
       };
     } catch (error) {
-      logger.error("Failed to deploy insurance position:", error);
+      logger.error("部署保险仓位失败:", error);
       return {
         success: false,
         action: "CREATE",

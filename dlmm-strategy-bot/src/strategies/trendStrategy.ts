@@ -26,7 +26,7 @@ export class TrendStrategy {
     this.poolAddress = poolAddress;
     this.allocatedCapital = config.totalCapital * config.trendAllocation;
     logger.info(
-      `Trend Strategy initialized with $${this.allocatedCapital} capital`
+      `趋势策略已初始化，资金: $${this.allocatedCapital}`
     );
   }
 
@@ -113,7 +113,7 @@ export class TrendStrategy {
           this.lastBreakoutDirection = "up";
         }
         logger.debug(
-          `Upward breakout detected. Consecutive: ${this.consecutiveBreakouts}`
+          `检测到向上突破，连续次数: ${this.consecutiveBreakouts}`
         );
       } else if (rangeIndex < prevRangeIndex) {
         // 向下突破
@@ -124,7 +124,7 @@ export class TrendStrategy {
           this.lastBreakoutDirection = "down";
         }
         logger.debug(
-          `Downward breakout detected. Consecutive: ${this.consecutiveBreakouts}`
+          `检测到向下突破，连续次数: ${this.consecutiveBreakouts}`
         );
       }
     }
@@ -153,7 +153,7 @@ export class TrendStrategy {
         this.activePositions.delete(position.id);
 
         logger.info(
-          `Closed trend position ${position.id} due to trend reversal`
+          `趋势反转，关闭区间 ${position.range.lower}-${position.range.upper} 的仓位`
         );
 
         return {
@@ -212,7 +212,7 @@ export class TrendStrategy {
       );
 
       if (positionSize < 10) {
-        logger.warn("Insufficient capital for trend position");
+        logger.warn("资金不足，无法创建趋势仓位");
         return null;
       }
 
@@ -243,7 +243,7 @@ export class TrendStrategy {
       this.activePositions.set(position.id, position);
 
       logger.info(
-        `Deployed Trend position in range ${targetRange.lower}-${targetRange.upper} with $${positionSize} (${side})`
+        `在区间 ${targetRange.lower}-${targetRange.upper} 部署趋势仓位，金额: $${positionSize} (${side})`
       );
 
       // 部署后重置连续突破计数
@@ -257,7 +257,7 @@ export class TrendStrategy {
         message: `Created trend position following ${this.lastBreakoutDirection}trend`,
       };
     } catch (error) {
-      logger.error("Failed to deploy trend position:", error);
+      logger.error("部署趋势仓位失败:", error);
       return {
         success: false,
         action: "CREATE",

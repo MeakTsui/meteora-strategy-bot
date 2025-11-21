@@ -7,26 +7,26 @@ import logger from "./utils/logger";
  */
 async function main() {
   try {
-    logger.info("☄️  METEORA DLMM STRATEGY BOT ☄️");
+    logger.info("☄️  METEORA DLMM 策略机器人 ☄️");
     logger.info("================================\n");
 
     // 校验配置
-    logger.info("Validating configuration...");
+    logger.info("正在校验配置...");
     validateConfig();
-    logger.info("✅ Configuration validated\n");
+    logger.info("✅ 配置校验通过\n");
 
     // 创建并启动机器人
     const bot = new DLMMBot();
     
     // 处理优雅关闭
     process.on("SIGINT", () => {
-      logger.info("\nReceived SIGINT signal");
+      logger.info("\n收到 SIGINT 信号");
       bot.stop();
       process.exit(0);
     });
 
     process.on("SIGTERM", () => {
-      logger.info("\nReceived SIGTERM signal");
+      logger.info("\n收到 SIGTERM 信号");
       bot.stop();
       process.exit(0);
     });
@@ -34,7 +34,7 @@ async function main() {
     // 启动机器人
     await bot.start();
   } catch (error) {
-    logger.error("Fatal error:", error);
+    logger.error("致命错误:", error);
     process.exit(1);
   }
 }

@@ -24,7 +24,7 @@ export class BidAskStrategy {
     this.poolAddress = poolAddress;
     this.allocatedCapital = config.totalCapital * config.mainAllocation;
     logger.info(
-      `BidAsk Strategy initialized with $${this.allocatedCapital} capital`
+      `Bid-Ask 策略已初始化，资金: $${this.allocatedCapital}`
     );
   }
 
@@ -38,7 +38,7 @@ export class BidAskStrategy {
       // 查找当前价格所在区间
       const currentRange = rangeManager.findCurrentRange(currentPrice);
       if (!currentRange) {
-        logger.warn(`Price ${currentPrice} is out of configured range`);
+        logger.warn(`价格 ${currentPrice} 超出配置区间`);
         return results;
       }
 
@@ -86,7 +86,7 @@ export class BidAskStrategy {
     // 检查价格是否突破上界（含阈值）
     if (currentPrice > upperThreshold) {
       logger.info(
-        `Price ${currentPrice} broke above range ${range.lower}-${range.upper}, redeploying`
+        `价格 ${currentPrice} 突破区间 ${range.lower}-${range.upper} 上界，重新部署`
       );
 
       try {
@@ -140,7 +140,7 @@ export class BidAskStrategy {
 
       if (positionSize < 10) {
         // 每个仓位最少 $10
-        logger.warn("Insufficient capital for new position");
+        logger.warn("资金不足，无法创建新仓位");
         return null;
       }
 
@@ -171,7 +171,7 @@ export class BidAskStrategy {
       this.activePositions.set(position.id, position);
 
       logger.info(
-        `Deployed BidAsk position in range ${range.lower}-${range.upper} with $${positionSize}`
+        `在区间 ${range.lower}-${range.upper} 部署 Bid-Ask 仓位，金额: $${positionSize}`
       );
 
       return {
@@ -182,7 +182,7 @@ export class BidAskStrategy {
         message: `Created position in range ${range.lower}-${range.upper}`,
       };
     } catch (error) {
-      logger.error("Failed to deploy position:", error);
+      logger.error("部署仓位失败:", error);
       return {
         success: false,
         action: "CREATE",
