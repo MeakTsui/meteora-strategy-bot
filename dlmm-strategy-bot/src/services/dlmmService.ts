@@ -126,12 +126,9 @@ export class DLMMService {
       }
 
       // 根据仓位方向选择 DLMM 内置策略类型
-      let strategyType: StrategyType;
-      if (side === PositionSide.BALANCED) {
-        strategyType = StrategyType.SpotBalanced;
-      } else {
-        strategyType = StrategyType.SpotOneSide;
-      }
+      // Meteora SDK 的 StrategyType: Spot, Curve, BidAsk
+      // 对于所有单边和平衡仓位，使用 Spot 策略
+      const strategyType = StrategyType.Spot;
 
       const positionKeypair = Keypair.generate();
       const userPubkey = this.wallet
@@ -224,7 +221,8 @@ export class DLMMService {
       const removeLiquidityTx = await dlmmPool.removeLiquidity({
         position: positionPubkey,
         user: userPubkey,
-        binIds: binIdsToRemove,
+        fromBinId: Math.min(...binIdsToRemove),
+        toBinId: Math.max(...binIdsToRemove),
         bps: new BN(100 * 100), // 100%
         shouldClaimAndClose: true,
       });
