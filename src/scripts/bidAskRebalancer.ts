@@ -395,7 +395,7 @@ class BidAskRebalancer {
       }
 
       // 等待状态更新
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      await new Promise(resolve => setTimeout(resolve, 20000));
       await this.dlmmPool.refetchStates();
 
       // Step 2: 使用 Bid-Ask 策略重新添加流动性
