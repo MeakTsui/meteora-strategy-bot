@@ -3,6 +3,7 @@ import DLMM, { StrategyType } from "@meteora-ag/dlmm";
 import bs58 from "bs58";
 import dotenv from "dotenv";
 import BN from "bn.js";
+import { getValueTracker, ValueTracker } from "../services/valueTracker";
 
 dotenv.config();
 
@@ -142,6 +143,9 @@ class BidAskRebalancer {
   private dlmmPool: DLMM | null = null;
   private isRunning = false;
   private positionStates: Map<string, PositionState> = new Map();
+  private valueTracker: ValueTracker;
+  private tokenXDecimals: number = 9;
+  private tokenYDecimals: number = 6;
 
   constructor(poolAddress: string) {
     this.connection = new Connection(CONFIG.RPC_URL, "confirmed");
@@ -153,6 +157,7 @@ class BidAskRebalancer {
     
     this.wallet = createWalletFromSecret(walletSecret);
     this.poolAddress = poolAddress;
+    this.valueTracker = getValueTracker();
     
     log(`钱包地址: ${this.wallet.publicKey.toBase58()}`);
     log(`池地址: ${poolAddress}`);
@@ -167,11 +172,11 @@ class BidAskRebalancer {
     const poolPubkey = new PublicKey(this.poolAddress);
     this.dlmmPool = await DLMM.create(this.connection, poolPubkey);
     
-    const tokenXDecimals = this.dlmmPool.tokenX.mint.decimals;
-    const tokenYDecimals = this.dlmmPool.tokenY.mint.decimals;
+    this.tokenXDecimals = this.dlmmPool.tokenX.mint.decimals;
+    this.tokenYDecimals = this.dlmmPool.tokenY.mint.decimals;
     
-    log(`Token X: ${this.dlmmPool.tokenX.publicKey.toBase58()} (精度: ${tokenXDecimals})`);
-    log(`Token Y: ${this.dlmmPool.tokenY.publicKey.toBase58()} (精度: ${tokenYDecimals})`);
+    log(`Token X: ${this.dlmmPool.tokenX.publicKey.toBase58()} (精度: ${this.tokenXDecimals})`);
+    log(`Token Y: ${this.dlmmPool.tokenY.publicKey.toBase58()} (精度: ${this.tokenYDecimals})`);
     log(`Bin Step: ${this.dlmmPool.lbPair.binStep}`);
     log("初始化完成", "success");
   }
@@ -469,6 +474,28 @@ class BidAskRebalancer {
       const positions = await this.getPositions();
       log(`找到 ${positions.length} 个仓位`);
 
+      // 获取当前价格并记录快照
+      const activeBin = await this.dlmmPool!.getActiveBin();
+      const currentPrice = parseFloat(activeBin.pricePerToken);
+      
+      const snapshotPositions = positions.map(p => ({
+        publicKey: p.publicKey.toBase58(),
+        binDistribution: p.binDistribution,
+        lowerBinId: p.lowerBinId,
+        upperBinId: p.upperBinId,
+        totalXAmount: p.totalXAmount,
+        totalYAmount: p.totalYAmount,
+      }));
+      
+      const snapshot = this.valueTracker.takeSnapshot(
+        snapshotPositions,
+        currentPrice,
+        this.tokenXDecimals,
+        this.tokenYDecimals
+      );
+      
+      log(`📊 当前总价值: $${snapshot.totalValueUSD.toFixed(2)} | 价格: $${currentPrice.toFixed(4)}`);
+
       let rebalanceCount = 0;
 
       for (const position of positions) {
@@ -476,9 +503,40 @@ class BidAskRebalancer {
         
         if (action) {
           rebalanceCount++;
+          
+          // 计算操作前价值
+          const beforeValue = this.valueTracker.calculatePositionValue(
+            position.binDistribution,
+            this.tokenXDecimals,
+            this.tokenYDecimals
+          ).totalValueUSD;
+          
           const success = await this.executeRebalance(action);
           
-          if (!success) {
+          if (success) {
+            // 重新获取仓位计算操作后价值
+            const updatedPositions = await this.getPositions();
+            const updatedPos = updatedPositions.find(
+              p => p.publicKey.toBase58() === position.publicKey.toBase58()
+            );
+            
+            const afterValue = updatedPos 
+              ? this.valueTracker.calculatePositionValue(
+                  updatedPos.binDistribution,
+                  this.tokenXDecimals,
+                  this.tokenYDecimals
+                ).totalValueUSD
+              : beforeValue;
+            
+            // 记录操作
+            this.valueTracker.recordOperation(
+              position.publicKey.toBase58(),
+              action.action,
+              beforeValue,
+              afterValue,
+              action.amount.toNumber()
+            );
+          } else {
             log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 重新平衡失败，将在下次检查时重试`, "warn");
           }
           
@@ -497,6 +555,13 @@ class BidAskRebalancer {
         log("所有仓位状态正常，无需调整");
       } else {
         log(`本轮完成 ${rebalanceCount} 个仓位的重新平衡`, "success");
+      }
+      
+      // 显示汇总信息
+      const summary = this.valueTracker.getSummary();
+      if (summary.todayPnL !== 0) {
+        const pnlSign = summary.todayPnL >= 0 ? '+' : '';
+        log(`📈 今日 PnL: ${pnlSign}$${summary.todayPnL.toFixed(2)} (${pnlSign}${summary.todayPnLPercent.toFixed(2)}%)`);
       }
 
     } catch (error) {
