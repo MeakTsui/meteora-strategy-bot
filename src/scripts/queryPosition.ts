@@ -7,11 +7,148 @@ import BN from "bn.js";
 dotenv.config();
 
 /**
- * 将十六进制字符串转换为数字
+ * 终端柱状图配置
  */
-function hexToNumber(hex: string): number {
-  if (!hex || hex === "00") return 0;
-  return parseInt(hex, 16);
+const CHART_CONFIG = {
+  maxWidth: 50,      // 柱状图最大宽度
+  barCharFull: '█',  // 满格字符
+  barCharHalf: '▌',  // 半格字符
+  barCharEmpty: '░', // 空格字符
+};
+
+/**
+ * 绘制终端柱状图
+ */
+function drawBarChart(
+  data: { label: string; valueX: number; valueY: number; isActive?: boolean }[],
+  tokenXDecimals: number,
+  tokenYDecimals: number
+): void {
+  if (data.length === 0) return;
+
+  // 计算最大值用于归一化
+  const maxX = Math.max(...data.map(d => d.valueX), 1);
+  const maxY = Math.max(...data.map(d => d.valueY), 1);
+
+  // 找到最长的标签用于对齐
+  const maxLabelLen = Math.max(...data.map(d => d.label.length), 8);
+
+  console.log('\n' + '─'.repeat(80));
+  console.log('📊 Bin 分布柱状图');
+  console.log('─'.repeat(80));
+  
+  // 图例
+  console.log(`\n   ${'Bin ID'.padEnd(maxLabelLen)}  Token X (左) | Token Y (右)`);
+  console.log(`   ${''.padEnd(maxLabelLen)}  ${CHART_CONFIG.barCharFull.repeat(5)} X    ${CHART_CONFIG.barCharFull.repeat(5)} Y\n`);
+
+  data.forEach(item => {
+    const normalizedX = Math.round((item.valueX / maxX) * CHART_CONFIG.maxWidth);
+    const normalizedY = Math.round((item.valueY / maxY) * CHART_CONFIG.maxWidth);
+
+    // 格式化数值显示
+    const xAmount = (item.valueX / Math.pow(10, tokenXDecimals)).toFixed(4);
+    const yAmount = (item.valueY / Math.pow(10, tokenYDecimals)).toFixed(2);
+
+    // 活跃 bin 标记
+    const activeMarker = item.isActive ? ' ◀ ACTIVE' : '';
+    
+    // 绘制 Token X 柱状图（蓝色）
+    const barX = CHART_CONFIG.barCharFull.repeat(normalizedX) + 
+                 CHART_CONFIG.barCharEmpty.repeat(CHART_CONFIG.maxWidth - normalizedX);
+    
+    // 绘制 Token Y 柱状图（绿色）  
+    const barY = CHART_CONFIG.barCharFull.repeat(normalizedY) +
+                 CHART_CONFIG.barCharEmpty.repeat(CHART_CONFIG.maxWidth - normalizedY);
+
+    // 输出行
+    console.log(`   ${item.label.padEnd(maxLabelLen)}  \x1b[34m${barX}\x1b[0m ${xAmount.padStart(10)}`);
+    console.log(`   ${''.padEnd(maxLabelLen)}  \x1b[32m${barY}\x1b[0m ${yAmount.padStart(10)}${activeMarker}`);
+    console.log('');
+  });
+
+  // 显示汇总
+  const totalX = data.reduce((sum, d) => sum + d.valueX, 0);
+  const totalY = data.reduce((sum, d) => sum + d.valueY, 0);
+  console.log('─'.repeat(80));
+  console.log(`   总计: Token X = ${(totalX / Math.pow(10, tokenXDecimals)).toFixed(6)}, Token Y = ${(totalY / Math.pow(10, tokenYDecimals)).toFixed(2)}`);
+}
+
+/**
+ * 绘制简化的水平柱状图（单行显示，使用价格显示）
+ */
+function drawSimpleBarChart(
+  data: { binId: number; price: number; valueX: number; valueY: number; isActive?: boolean }[],
+  tokenXDecimals: number,
+  tokenYDecimals: number,
+  activeBinId: number
+): void {
+  if (data.length === 0) return;
+
+  // 按价格排序（从低到高）
+  const sortedData = [...data].sort((a, b) => a.price - b.price);
+
+  // 计算最大值
+  const maxX = Math.max(...sortedData.map(d => d.valueX), 1);
+  const maxY = Math.max(...sortedData.map(d => d.valueY), 1);
+  const maxTotal = Math.max(maxX, maxY);
+
+  console.log('\n' + '═'.repeat(80));
+  console.log('📊 价格区间流动性分布图');
+  console.log('═'.repeat(80));
+  console.log(`\n   \x1b[34m█\x1b[0m Token X    \x1b[32m█\x1b[0m Token Y    \x1b[33m◆\x1b[0m 当前价格位置\n`);
+
+  sortedData.forEach(item => {
+    const isActive = item.binId === activeBinId;
+    const barWidth = 35;
+    
+    // 计算柱状图长度
+    const lenX = Math.round((item.valueX / maxTotal) * barWidth);
+    const lenY = Math.round((item.valueY / maxTotal) * barWidth);
+
+    // 格式化数值
+    const xDisplay = (item.valueX / Math.pow(10, tokenXDecimals)).toFixed(4);
+    const yDisplay = (item.valueY / Math.pow(10, tokenYDecimals)).toFixed(2);
+
+    // 活跃标记
+    const marker = isActive ? '\x1b[33m◆\x1b[0m' : ' ';
+    
+    // 使用价格作为标签，保留适当精度
+    const priceLabel = `$${item.price.toFixed(4)}`.padEnd(14);
+
+    // 组合柱状图
+    const barX = '\x1b[34m' + CHART_CONFIG.barCharFull.repeat(lenX) + '\x1b[0m';
+    const barY = '\x1b[32m' + CHART_CONFIG.barCharFull.repeat(lenY) + '\x1b[0m';
+    const padding = ' '.repeat(Math.max(0, barWidth - lenX - lenY));
+
+    console.log(`${marker} ${priceLabel} ${barX}${barY}${padding} X:${xDisplay} Y:${yDisplay}`);
+  });
+
+  // 汇总信息
+  const totalX = sortedData.reduce((sum, d) => sum + d.valueX, 0);
+  const totalY = sortedData.reduce((sum, d) => sum + d.valueY, 0);
+  const minPrice = sortedData[0]?.price || 0;
+  const maxPrice = sortedData[sortedData.length - 1]?.price || 0;
+  
+  console.log('\n' + '─'.repeat(80));
+  console.log(`   📈 价格范围: $${minPrice.toFixed(4)} ~ $${maxPrice.toFixed(4)}`);
+  console.log(`   💰 汇总: Token X = ${(totalX / Math.pow(10, tokenXDecimals)).toFixed(6)}, Token Y = ${(totalY / Math.pow(10, tokenYDecimals)).toFixed(2)}`);
+  console.log('═'.repeat(80));
+}
+
+/**
+ * 安全地将 BN 或其他类型转换为数字
+ */
+function toNumber(value: any): number {
+  if (!value) return 0;
+  if (value instanceof BN) return value.toNumber();
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') {
+    // 处理十六进制字符串
+    if (value.startsWith('0x')) return parseInt(value, 16);
+    return parseFloat(value) || 0;
+  }
+  if (typeof value === 'bigint') return Number(value);
+  return 0;
 }
 
 /**
@@ -125,19 +262,24 @@ async function queryPosition() {
     console.log(`   Token Y: ${dlmmPool.tokenY.publicKey.toBase58()} (精度: ${tokenYDecimals})`);
     console.log(`   Bin Step: ${dlmmPool.lbPair.binStep}`);
     
-    // 获取当前活跃 bin
-    const activeBin = await dlmmPool.getActiveBin();
-    console.log(`   当前活跃 Bin ID: ${activeBin.binId}`);
-    console.log(`   当前价格: ${formatPrice(activeBin.pricePerToken)}`);
+    // 获取手续费信息
+    const feeInfo = dlmmPool.getFeeInfo();
+    const dynamicFee = dlmmPool.getDynamicFee();
+    console.log(`   基础手续费率: ${feeInfo.baseFeeRatePercentage}%`);
+    console.log(`   最大手续费率: ${feeInfo.maxFeeRatePercentage}%`);
+    console.log(`   当前动态手续费: ${dynamicFee.toString()}%`);
 
-    // 获取用户在该池中的所有仓位
+    // 获取用户在该池中的所有仓位（同时返回 activeBin）
     console.log("\n" + "=".repeat(80));
     console.log("📦 查询用户仓位...");
     console.log("=".repeat(80));
 
-    const { userPositions } = await dlmmPool.getPositionsByUserAndLbPair(
+    const { userPositions, activeBin } = await dlmmPool.getPositionsByUserAndLbPair(
       userPubkey
     );
+
+    console.log(`\n📊 当前活跃 Bin ID: ${activeBin.binId}`);
+    console.log(`   当前价格: ${formatPrice(activeBin.pricePerToken)}`);
 
     if (userPositions.length === 0) {
       console.log("\n❌ 未找到任何仓位");
@@ -157,13 +299,17 @@ async function queryPosition() {
       console.log(`   仓位地址: ${position.publicKey.toBase58()}`);
       console.log(`   所有者: ${posData.owner.toBase58()}`);
 
-      // 解析十六进制数据
-      const totalXAmount = hexToNumber(posData.totalXAmount as any);
-      const totalYAmount = hexToNumber(posData.totalYAmount as any);
-      const feeX = hexToNumber(posData.feeX as any);
-      const feeY = hexToNumber(posData.feeY as any);
-      const lowerBinId = typeof posData.lowerBinId === 'string' ? hexToNumber(posData.lowerBinId) : posData.lowerBinId;
-      const upperBinId = typeof posData.upperBinId === 'string' ? hexToNumber(posData.upperBinId) : posData.upperBinId;
+      // 安全解析数据（SDK 返回的可能是 BN 类型）
+      const totalXAmount = toNumber(posData.totalXAmount);
+      const totalYAmount = toNumber(posData.totalYAmount);
+      const feeX = toNumber(posData.feeX);
+      const feeY = toNumber(posData.feeY);
+      const lowerBinId = toNumber(posData.lowerBinId);
+      const upperBinId = toNumber(posData.upperBinId);
+
+      // 判断仓位是否在当前价格范围内
+      const isInRange = activeBin.binId >= lowerBinId && activeBin.binId <= upperBinId;
+      console.log(`   状态: ${isInRange ? '🟢 在范围内' : '🔴 超出范围'}`);
 
       // 显示流动性信息
       console.log("\n💰 流动性总览:");
@@ -204,8 +350,8 @@ async function queryPosition() {
       console.log(`   可领取 Token Y 手续费: ${formatAmount(feeY, tokenYDecimals)} (原始: ${feeY.toLocaleString()})`);
       
       // 显示奖励信息
-      const rewardOne = hexToNumber(posData.rewardOne as any);
-      const rewardTwo = hexToNumber(posData.rewardTwo as any);
+      const rewardOne = toNumber(posData.rewardOne);
+      const rewardTwo = toNumber(posData.rewardTwo);
       
       if (rewardOne > 0 || rewardTwo > 0) {
         console.log("\n🎁 奖励信息:");
@@ -217,21 +363,34 @@ async function queryPosition() {
         }
       }
 
-      // 显示详细的 Bin 信息
-      if (positionBinData && positionBinData.length > 0 && positionBinData.length <= 10) {
-        console.log("\n📊 各 Bin 详情:");
-        positionBinData.forEach((bin, idx) => {
-          const posX = typeof bin.positionXAmount === 'string' ? parseFloat(bin.positionXAmount) : bin.positionXAmount;
-          const posY = typeof bin.positionYAmount === 'string' ? parseFloat(bin.positionYAmount) : bin.positionYAmount;
-          const price = typeof bin.price === 'string' ? parseFloat(bin.price) : bin.price;
-          
-          console.log(`\n   Bin #${idx + 1} (ID: ${bin.binId}):`);
-          console.log(`      价格: ${formatPrice(price)}`);
-          console.log(`      Token X: ${formatAmount(posX, tokenXDecimals)}`);
-          console.log(`      Token Y: ${formatAmount(posY, tokenYDecimals)}`);
-        });
-      } else if (positionBinData && positionBinData.length > 10) {
-        console.log(`\n   ℹ️  Bin 数量较多 (${positionBinData.length} 个)，已省略详细信息`);
+      // 绘制柱状图
+      if (positionBinData && positionBinData.length > 0) {
+        const chartData = positionBinData.map(bin => ({
+          binId: bin.binId,
+          price: typeof bin.price === 'string' ? parseFloat(bin.price) : bin.price,
+          valueX: typeof bin.positionXAmount === 'string' ? parseFloat(bin.positionXAmount) : bin.positionXAmount,
+          valueY: typeof bin.positionYAmount === 'string' ? parseFloat(bin.positionYAmount) : bin.positionYAmount,
+          isActive: bin.binId === activeBin.binId,
+        }));
+
+        // 使用简化柱状图显示
+        drawSimpleBarChart(chartData, tokenXDecimals, tokenYDecimals, activeBin.binId);
+
+        // 如果 bin 数量较少，也显示详细信息
+        if (positionBinData.length <= 10) {
+          console.log("\n� 各 Bin 详情:");
+          positionBinData.forEach((bin, idx) => {
+            const posX = typeof bin.positionXAmount === 'string' ? parseFloat(bin.positionXAmount) : bin.positionXAmount;
+            const posY = typeof bin.positionYAmount === 'string' ? parseFloat(bin.positionYAmount) : bin.positionYAmount;
+            const price = typeof bin.price === 'string' ? parseFloat(bin.price) : bin.price;
+            const isActive = bin.binId === activeBin.binId;
+            
+            console.log(`\n   Bin #${idx + 1} (ID: ${bin.binId})${isActive ? ' \x1b[33m◀ ACTIVE\x1b[0m' : ''}:`);
+            console.log(`      价格: ${formatPrice(price)}`);
+            console.log(`      Token X: ${formatAmount(posX, tokenXDecimals)}`);
+            console.log(`      Token Y: ${formatAmount(posY, tokenYDecimals)}`);
+          });
+        }
       }
 
       console.log("\n");
