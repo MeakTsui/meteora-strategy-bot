@@ -445,12 +445,12 @@
               <span class="font-semibold">${formatCurrency(pos.valueUSD)}</span>
             </div>
             <div class="flex h-2 rounded-full overflow-hidden bg-gray-200">
-              <div class="bg-blue-500" style="width: ${xPercent}%" title="SOL: ${formatCurrency(pos.xValueUSD)}"></div>
               <div class="bg-green-500" style="width: ${yPercent}%" title="USDC: ${formatCurrency(pos.yValueUSD)}"></div>
+              <div class="bg-blue-500" style="width: ${xPercent}%" title="SOL: ${formatCurrency(pos.xValueUSD)}"></div>
             </div>
             <div class="flex justify-between text-xs text-gray-500 mt-1">
-              <span>SOL: ${xPercent.toFixed(1)}%</span>
               <span>USDC: ${yPercent.toFixed(1)}%</span>
+              <span>SOL: ${xPercent.toFixed(1)}%</span>
             </div>
             <div class="text-xs text-gray-400 mt-1">
               价格区间: $${pos.priceRange[0].toFixed(2)} - $${pos.priceRange[1].toFixed(2)}
