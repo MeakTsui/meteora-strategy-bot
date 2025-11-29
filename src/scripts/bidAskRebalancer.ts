@@ -215,9 +215,13 @@ class BidAskRebalancer {
         const yAmount = typeof bin.positionYAmount === 'string' 
           ? parseFloat(bin.positionYAmount) 
           : bin.positionYAmount;
-        const price = typeof bin.price === 'string'
+        
+        // bin.price 是 price per lamport，需要转换为真实价格
+        const pricePerLamport = typeof bin.price === 'string'
           ? parseFloat(bin.price)
           : bin.price;
+        // 使用 SDK 的 fromPricePerLamport 方法转换为真实价格
+        const price = parseFloat(this.dlmmPool!.fromPricePerLamport(pricePerLamport));
         
         totalX += xAmount;
         totalY += yAmount;

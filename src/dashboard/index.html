@@ -230,6 +230,21 @@
 
     function formatPercent(value) {
       const sign = value >= 0 ? '+' : '';
+      
+      // 处理极端值或无效值
+      if (!isFinite(value) || isNaN(value)) {
+        return 'N/A';
+      }
+      
+      // 对于非常大或非常小的值，使用简化显示
+      if (Math.abs(value) >= 10000) {
+        return `${sign}${(value / 1000).toFixed(1)}K%`;
+      } else if (Math.abs(value) >= 1000) {
+        return `${sign}${value.toFixed(0)}%`;
+      } else if (Math.abs(value) >= 100) {
+        return `${sign}${value.toFixed(1)}%`;
+      }
+      
       return `${sign}${value.toFixed(2)}%`;
     }
 
@@ -416,7 +431,10 @@
         return;
       }
 
-      container.innerHTML = positions.map(pos => {
+      // 按价格区间从高到低排序（使用价格区间的上限）
+      const sortedPositions = [...positions].sort((a, b) => b.priceRange[1] - a.priceRange[1]);
+
+      container.innerHTML = sortedPositions.map(pos => {
         const xPercent = pos.valueUSD > 0 ? (pos.xValueUSD / pos.valueUSD * 100) : 0;
         const yPercent = 100 - xPercent;
         

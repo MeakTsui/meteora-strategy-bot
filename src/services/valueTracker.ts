@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import Database = require('better-sqlite3');
 
 // ============================================================================
 // 类型定义
@@ -17,6 +18,7 @@ export interface PositionValue {
 }
 
 export interface ValueSnapshot {
+  id?: number;
   timestamp: number;
   totalValueUSD: number;
   currentPrice: number;   // 当前活跃 bin 的价格
@@ -24,6 +26,7 @@ export interface ValueSnapshot {
 }
 
 export interface OperationRecord {
+  id?: number;
   timestamp: number;
   positionKey: string;
   action: 'bid' | 'ask';
@@ -34,6 +37,7 @@ export interface OperationRecord {
 }
 
 export interface DailyPnL {
+  id?: number;
   date: string;           // YYYY-MM-DD
   openValue: number;      // 当日开盘价值
   closeValue: number;     // 当日收盘价值
@@ -59,29 +63,38 @@ export interface TrackerSummary {
 }
 
 // ============================================================================
-// 价值追踪服务
+// 价值追踪服务 (SQLite3)
 // ============================================================================
 
-export class ValueTracker {
-  private dataDir: string;
-  private snapshotsFile: string;
-  private operationsFile: string;
-  private dailyPnLFile: string;
+// 快照间隔配置（毫秒）
+const SNAPSHOT_INTERVAL_MS = 10 * 60 * 1000; // 10 分钟
 
-  private snapshots: ValueSnapshot[] = [];
-  private operations: OperationRecord[] = [];
-  private dailyPnL: DailyPnL[] = [];
+export class ValueTracker {
+  private db: Database.Database;
+  private dataDir: string;
+  private dbPath: string;
+  private lastSnapshotTime: number = 0;
+  private lastSnapshot: ValueSnapshot | null = null;
 
   constructor(dataDir?: string) {
-    // 使用 __dirname 确保路径相对于此文件位置，而不是运行时工作目录
+    // 使用 __dirname 确保路径相对于此文件位置
     this.dataDir = dataDir || path.join(__dirname, '..', 'data');
-    this.snapshotsFile = path.join(this.dataDir, 'snapshots.json');
-    this.operationsFile = path.join(this.dataDir, 'operations.json');
-    this.dailyPnLFile = path.join(this.dataDir, 'daily_pnl.json');
+    this.dbPath = path.join(this.dataDir, 'tracker.db');
 
-    console.log(`[ValueTracker] 数据目录: ${this.dataDir}`);
     this.ensureDataDir();
-    this.loadData();
+    console.log(`[ValueTracker] 数据库: ${this.dbPath}`);
+    
+    this.db = new Database(this.dbPath);
+    this.db.pragma('journal_mode = WAL');  // 启用 WAL 模式提高性能
+    this.initTables();
+    
+    // 从数据库加载最后一次快照时间
+    const lastRecord = this.db.prepare(
+      'SELECT timestamp FROM snapshots ORDER BY timestamp DESC LIMIT 1'
+    ).get() as { timestamp: number } | undefined;
+    if (lastRecord) {
+      this.lastSnapshotTime = lastRecord.timestamp;
+    }
   }
 
   /**
@@ -94,35 +107,66 @@ export class ValueTracker {
   }
 
   /**
-   * 加载已有数据
+   * 初始化数据库表
    */
-  private loadData(): void {
-    try {
-      if (fs.existsSync(this.snapshotsFile)) {
-        this.snapshots = JSON.parse(fs.readFileSync(this.snapshotsFile, 'utf-8'));
-      }
-      if (fs.existsSync(this.operationsFile)) {
-        this.operations = JSON.parse(fs.readFileSync(this.operationsFile, 'utf-8'));
-      }
-      if (fs.existsSync(this.dailyPnLFile)) {
-        this.dailyPnL = JSON.parse(fs.readFileSync(this.dailyPnLFile, 'utf-8'));
-      }
-    } catch (error) {
-      console.error('加载数据失败:', error);
-    }
+  private initTables(): void {
+    // 快照表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER NOT NULL,
+        total_value_usd REAL NOT NULL,
+        current_price REAL NOT NULL,
+        positions TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_snapshots_timestamp ON snapshots(timestamp);
+    `);
+
+    // 操作记录表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS operations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER NOT NULL,
+        position_key TEXT NOT NULL,
+        action TEXT NOT NULL,
+        before_value_usd REAL NOT NULL,
+        after_value_usd REAL NOT NULL,
+        amount_processed REAL NOT NULL,
+        tx_signature TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_operations_timestamp ON operations(timestamp);
+    `);
+
+    // 每日 PnL 表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS daily_pnl (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL UNIQUE,
+        open_value REAL NOT NULL,
+        close_value REAL NOT NULL,
+        high_value REAL NOT NULL,
+        low_value REAL NOT NULL,
+        pnl REAL NOT NULL,
+        pnl_percent REAL NOT NULL,
+        operations INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_daily_pnl_date ON daily_pnl(date);
+    `);
   }
 
   /**
-   * 保存数据到文件
+   * 清理旧数据
    */
-  private saveData(): void {
-    try {
-      fs.writeFileSync(this.snapshotsFile, JSON.stringify(this.snapshots, null, 2));
-      fs.writeFileSync(this.operationsFile, JSON.stringify(this.operations, null, 2));
-      fs.writeFileSync(this.dailyPnLFile, JSON.stringify(this.dailyPnL, null, 2));
-    } catch (error) {
-      console.error('保存数据失败:', error);
-    }
+  private cleanOldData(): void {
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+
+    this.db.prepare('DELETE FROM snapshots WHERE timestamp < ?').run(thirtyDaysAgo);
+    this.db.prepare('DELETE FROM operations WHERE timestamp < ?').run(ninetyDaysAgo);
   }
 
   /**
@@ -151,7 +195,8 @@ export class ValueTracker {
   }
 
   /**
-   * 记录价值快照
+   * 记录价值快照（每 10 分钟记录一次到数据库）
+   * 返回当前计算的快照数据（无论是否写入数据库）
    */
   takeSnapshot(
     positions: {
@@ -195,23 +240,38 @@ export class ValueTracker {
       totalValueUSD += posValue;
     }
 
+    const timestamp = Date.now();
     const snapshot: ValueSnapshot = {
-      timestamp: Date.now(),
+      timestamp,
       totalValueUSD,
       currentPrice,
       positions: positionValues,
     };
 
-    this.snapshots.push(snapshot);
-    
-    // 只保留最近 30 天的快照（每分钟一个约 43200 条）
-    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
-    this.snapshots = this.snapshots.filter(s => s.timestamp > thirtyDaysAgo);
+    // 更新内存中的最新快照（用于实时显示）
+    this.lastSnapshot = snapshot;
+
+    // 检查是否需要写入数据库（间隔 10 分钟）
+    const timeSinceLastSnapshot = timestamp - this.lastSnapshotTime;
+    if (timeSinceLastSnapshot < SNAPSHOT_INTERVAL_MS) {
+      // 未到间隔时间，返回计算结果但不写入数据库
+      return snapshot;
+    }
+
+    // 插入数据库
+    const stmt = this.db.prepare(`
+      INSERT INTO snapshots (timestamp, total_value_usd, current_price, positions)
+      VALUES (?, ?, ?, ?)
+    `);
+    stmt.run(timestamp, totalValueUSD, currentPrice, JSON.stringify(positionValues));
+    this.lastSnapshotTime = timestamp;
 
     // 更新每日 PnL
     this.updateDailyPnL(snapshot);
 
-    this.saveData();
+    // 定期清理旧数据
+    this.cleanOldData();
+
     return snapshot;
   }
 
@@ -226,23 +286,26 @@ export class ValueTracker {
     amountProcessed: number,
     txSignature?: string
   ): void {
-    const record: OperationRecord = {
-      timestamp: Date.now(),
-      positionKey,
-      action,
-      beforeValueUSD,
-      afterValueUSD,
-      amountProcessed,
-      txSignature,
-    };
+    const timestamp = Date.now();
+    
+    const stmt = this.db.prepare(`
+      INSERT INTO operations (timestamp, position_key, action, before_value_usd, after_value_usd, amount_processed, tx_signature)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    stmt.run(timestamp, positionKey, action, beforeValueUSD, afterValueUSD, amountProcessed, txSignature || null);
 
-    this.operations.push(record);
-
-    // 只保留最近 90 天的操作记录
-    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
-    this.operations = this.operations.filter(o => o.timestamp > ninetyDaysAgo);
-
-    this.saveData();
+    // 更新今日操作次数
+    const today = new Date().toISOString().split('T')[0];
+    const todayStart = new Date(today).getTime();
+    const todayEnd = todayStart + 24 * 60 * 60 * 1000;
+    
+    const countResult = this.db.prepare(
+      'SELECT COUNT(*) as count FROM operations WHERE timestamp >= ? AND timestamp < ?'
+    ).get(todayStart, todayEnd) as { count: number };
+    
+    this.db.prepare(
+      'UPDATE daily_pnl SET operations = ?, updated_at = CURRENT_TIMESTAMP WHERE date = ?'
+    ).run(countResult.count, today);
   }
 
   /**
@@ -251,95 +314,123 @@ export class ValueTracker {
   private updateDailyPnL(snapshot: ValueSnapshot): void {
     const today = new Date().toISOString().split('T')[0];
     
-    let todayRecord = this.dailyPnL.find(d => d.date === today);
+    // 查找今日记录
+    const todayRecord = this.db.prepare(
+      'SELECT * FROM daily_pnl WHERE date = ?'
+    ).get(today) as any;
     
     if (!todayRecord) {
       // 获取昨天的收盘价值作为今天的开盘价值
-      const yesterday = this.dailyPnL[this.dailyPnL.length - 1];
-      const openValue = yesterday?.closeValue || snapshot.totalValueUSD;
+      const yesterday = this.db.prepare(
+        'SELECT close_value FROM daily_pnl ORDER BY date DESC LIMIT 1'
+      ).get() as { close_value: number } | undefined;
+      
+      const openValue = yesterday?.close_value || snapshot.totalValueUSD;
+      const pnl = snapshot.totalValueUSD - openValue;
+      const pnlPercent = openValue > 0 ? (pnl / openValue) * 100 : 0;
 
-      todayRecord = {
-        date: today,
-        openValue,
-        closeValue: snapshot.totalValueUSD,
-        highValue: snapshot.totalValueUSD,
-        lowValue: snapshot.totalValueUSD,
-        pnl: 0,
-        pnlPercent: 0,
-        operations: 0,
-      };
-      this.dailyPnL.push(todayRecord);
+      this.db.prepare(`
+        INSERT INTO daily_pnl (date, open_value, close_value, high_value, low_value, pnl, pnl_percent, operations)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      `).run(today, openValue, snapshot.totalValueUSD, snapshot.totalValueUSD, snapshot.totalValueUSD, pnl, pnlPercent);
+    } else {
+      // 更新今日数据
+      const highValue = Math.max(todayRecord.high_value, snapshot.totalValueUSD);
+      const lowValue = Math.min(todayRecord.low_value, snapshot.totalValueUSD);
+      const pnl = snapshot.totalValueUSD - todayRecord.open_value;
+      const pnlPercent = todayRecord.open_value > 0 ? (pnl / todayRecord.open_value) * 100 : 0;
+
+      this.db.prepare(`
+        UPDATE daily_pnl 
+        SET close_value = ?, high_value = ?, low_value = ?, pnl = ?, pnl_percent = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE date = ?
+      `).run(snapshot.totalValueUSD, highValue, lowValue, pnl, pnlPercent, today);
     }
-
-    // 更新今日数据
-    todayRecord.closeValue = snapshot.totalValueUSD;
-    todayRecord.highValue = Math.max(todayRecord.highValue, snapshot.totalValueUSD);
-    todayRecord.lowValue = Math.min(todayRecord.lowValue, snapshot.totalValueUSD);
-    todayRecord.pnl = todayRecord.closeValue - todayRecord.openValue;
-    todayRecord.pnlPercent = todayRecord.openValue > 0 
-      ? (todayRecord.pnl / todayRecord.openValue) * 100 
-      : 0;
-
-    // 统计今日操作次数
-    const todayStart = new Date(today).getTime();
-    const todayEnd = todayStart + 24 * 60 * 60 * 1000;
-    todayRecord.operations = this.operations.filter(
-      o => o.timestamp >= todayStart && o.timestamp < todayEnd
-    ).length;
   }
 
   /**
    * 计算 APY
    */
   calculateAPY(days: number): number {
-    if (this.dailyPnL.length < 2) return 0;
-
-    const recentDays = this.dailyPnL.slice(-days);
+    const recentDays = this.db.prepare(
+      'SELECT * FROM daily_pnl ORDER BY date DESC LIMIT ?'
+    ).all(days) as any[];
+    
+    // 至少需要 2 天数据才能计算有意义的 APY
     if (recentDays.length < 2) return 0;
 
-    const startValue = recentDays[0].openValue;
-    const endValue = recentDays[recentDays.length - 1].closeValue;
+    // 反转顺序（从旧到新）
+    recentDays.reverse();
+
+    const startValue = recentDays[0].open_value;
+    const endValue = recentDays[recentDays.length - 1].close_value;
     
     if (startValue <= 0) return 0;
 
     const totalReturn = (endValue - startValue) / startValue;
     const actualDays = recentDays.length;
     
-    // 年化: (1 + 总收益率) ^ (365 / 实际天数) - 1
-    const apy = (Math.pow(1 + totalReturn, 365 / actualDays) - 1) * 100;
+    // 如果实际天数太少（< 3天），直接返回简单年化而不用复利
+    if (actualDays < 3) {
+      // 简单年化 = 日收益率 * 365
+      const dailyReturn = totalReturn / actualDays;
+      const simpleAPY = dailyReturn * 365 * 100;
+      // 限制在合理范围内 [-1000%, +10000%]
+      return Math.max(-1000, Math.min(10000, simpleAPY));
+    }
     
-    return apy;
+    // 年化: (1 + 总收益率) ^ (365 / 实际天数) - 1
+    // 为避免极端值，限制 totalReturn 在 [-0.99, 10] 范围内
+    const clampedReturn = Math.max(-0.99, Math.min(10, totalReturn));
+    const apy = (Math.pow(1 + clampedReturn, 365 / actualDays) - 1) * 100;
+    
+    // 限制 APY 在合理范围内 [-1000%, +100000%]
+    return Math.max(-1000, Math.min(100000, apy));
   }
 
   /**
    * 获取汇总数据
    */
   getSummary(): TrackerSummary {
-    const latestSnapshot = this.snapshots[this.snapshots.length - 1];
-    const currentTotalValue = latestSnapshot?.totalValueUSD || 0;
+    // 获取最新快照
+    const latestSnapshot = this.db.prepare(
+      'SELECT * FROM snapshots ORDER BY timestamp DESC LIMIT 1'
+    ).get() as any;
+    
+    const currentTotalValue = latestSnapshot?.total_value_usd || 0;
+    const positions = latestSnapshot ? JSON.parse(latestSnapshot.positions) : [];
 
     // 今日 PnL
     const today = new Date().toISOString().split('T')[0];
-    const todayPnLRecord = this.dailyPnL.find(d => d.date === today);
+    const todayPnLRecord = this.db.prepare(
+      'SELECT * FROM daily_pnl WHERE date = ?'
+    ).get(today) as any;
+    
     const todayPnL = todayPnLRecord?.pnl || 0;
-    const todayPnLPercent = todayPnLRecord?.pnlPercent || 0;
+    const todayPnLPercent = todayPnLRecord?.pnl_percent || 0;
 
     // 总 PnL（从第一天到现在）
-    const firstRecord = this.dailyPnL[0];
-    const lastRecord = this.dailyPnL[this.dailyPnL.length - 1];
+    const firstRecord = this.db.prepare(
+      'SELECT * FROM daily_pnl ORDER BY date ASC LIMIT 1'
+    ).get() as any;
+    
+    const lastRecord = this.db.prepare(
+      'SELECT * FROM daily_pnl ORDER BY date DESC LIMIT 1'
+    ).get() as any;
+    
     const totalPnL = firstRecord && lastRecord 
-      ? lastRecord.closeValue - firstRecord.openValue 
+      ? lastRecord.close_value - firstRecord.open_value 
       : 0;
-    const totalPnLPercent = firstRecord && firstRecord.openValue > 0
-      ? (totalPnL / firstRecord.openValue) * 100
+    const totalPnLPercent = firstRecord && firstRecord.open_value > 0
+      ? (totalPnL / firstRecord.open_value) * 100
       : 0;
 
     // 今日操作次数
     const todayStart = new Date(today).getTime();
     const todayEnd = todayStart + 24 * 60 * 60 * 1000;
-    const todayOperations = this.operations.filter(
-      o => o.timestamp >= todayStart && o.timestamp < todayEnd
-    ).length;
+    const todayOpsResult = this.db.prepare(
+      'SELECT COUNT(*) as count FROM operations WHERE timestamp >= ? AND timestamp < ?'
+    ).get(todayStart, todayEnd) as { count: number };
 
     return {
       currentTotalValue,
@@ -349,9 +440,9 @@ export class ValueTracker {
       totalPnLPercent,
       apy7d: this.calculateAPY(7),
       apy30d: this.calculateAPY(30),
-      positionCount: latestSnapshot?.positions.length || 0,
-      todayOperations,
-      firstSnapshotDate: this.dailyPnL[0]?.date || null,
+      positionCount: positions.length,
+      todayOperations: todayOpsResult.count,
+      firstSnapshotDate: firstRecord?.date || null,
       lastUpdateTime: latestSnapshot?.timestamp || 0,
     };
   }
@@ -360,29 +451,69 @@ export class ValueTracker {
    * 获取最近的快照
    */
   getRecentSnapshots(count: number = 100): ValueSnapshot[] {
-    return this.snapshots.slice(-count);
+    const rows = this.db.prepare(
+      'SELECT * FROM snapshots ORDER BY timestamp DESC LIMIT ?'
+    ).all(count) as any[];
+    
+    return rows.reverse().map(row => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      totalValueUSD: row.total_value_usd,
+      currentPrice: row.current_price,
+      positions: JSON.parse(row.positions),
+    }));
   }
 
   /**
    * 获取每日 PnL 数据
    */
   getDailyPnL(days: number = 30): DailyPnL[] {
-    return this.dailyPnL.slice(-days);
+    const rows = this.db.prepare(
+      'SELECT * FROM daily_pnl ORDER BY date DESC LIMIT ?'
+    ).all(days) as any[];
+    
+    return rows.reverse().map(row => ({
+      id: row.id,
+      date: row.date,
+      openValue: row.open_value,
+      closeValue: row.close_value,
+      highValue: row.high_value,
+      lowValue: row.low_value,
+      pnl: row.pnl,
+      pnlPercent: row.pnl_percent,
+      operations: row.operations,
+    }));
   }
 
   /**
    * 获取操作历史
    */
   getOperations(count: number = 50): OperationRecord[] {
-    return this.operations.slice(-count).reverse();
+    const rows = this.db.prepare(
+      'SELECT * FROM operations ORDER BY timestamp DESC LIMIT ?'
+    ).all(count) as any[];
+    
+    return rows.map(row => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      positionKey: row.position_key,
+      action: row.action as 'bid' | 'ask',
+      beforeValueUSD: row.before_value_usd,
+      afterValueUSD: row.after_value_usd,
+      amountProcessed: row.amount_processed,
+      txSignature: row.tx_signature,
+    }));
   }
 
   /**
    * 获取最新仓位价值
    */
   getLatestPositions(): PositionValue[] {
-    const latestSnapshot = this.snapshots[this.snapshots.length - 1];
-    return latestSnapshot?.positions || [];
+    const latestSnapshot = this.db.prepare(
+      'SELECT positions FROM snapshots ORDER BY timestamp DESC LIMIT 1'
+    ).get() as { positions: string } | undefined;
+    
+    return latestSnapshot ? JSON.parse(latestSnapshot.positions) : [];
   }
 
   /**
@@ -390,9 +521,22 @@ export class ValueTracker {
    */
   getValueHistory(hours: number = 24): { timestamp: number; value: number }[] {
     const cutoff = Date.now() - hours * 60 * 60 * 1000;
-    return this.snapshots
-      .filter(s => s.timestamp > cutoff)
-      .map(s => ({ timestamp: s.timestamp, value: s.totalValueUSD }));
+    
+    const rows = this.db.prepare(
+      'SELECT timestamp, total_value_usd FROM snapshots WHERE timestamp > ? ORDER BY timestamp ASC'
+    ).all(cutoff) as any[];
+    
+    return rows.map(row => ({
+      timestamp: row.timestamp,
+      value: row.total_value_usd,
+    }));
+  }
+
+  /**
+   * 关闭数据库连接
+   */
+  close(): void {
+    this.db.close();
   }
 }
 
