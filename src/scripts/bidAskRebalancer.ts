@@ -43,6 +43,9 @@ interface PositionState {
   binCount: number;
   binDistribution: BinDistribution[];  // 各 bin 的分布数据
   lastAction?: "bid" | "ask";
+  // 未领取手续费
+  feeX: number;          // 未领取 SOL 手续费（原始值）
+  feeY: number;          // 未领取 USDC 手续费（原始值）
 }
 
 interface RebalanceAction {
@@ -237,6 +240,14 @@ class BidAskRebalancer {
       // 按价格排序（从低到高）
       binDistribution.sort((a, b) => a.price - b.price);
 
+      // 获取未领取手续费
+      const feeX = typeof posData.feeX === 'string' 
+        ? parseFloat(posData.feeX) 
+        : (posData.feeX?.toNumber?.() ?? posData.feeX ?? 0);
+      const feeY = typeof posData.feeY === 'string' 
+        ? parseFloat(posData.feeY) 
+        : (posData.feeY?.toNumber?.() ?? posData.feeY ?? 0);
+
       positions.push({
         publicKey: pos.publicKey,
         lowerBinId: toNumber(posData.lowerBinId),
@@ -245,6 +256,8 @@ class BidAskRebalancer {
         totalYAmount: totalY,
         binCount: binData.length,
         binDistribution,
+        feeX,
+        feeY,
       });
     }
 
@@ -489,6 +502,8 @@ class BidAskRebalancer {
         upperBinId: p.upperBinId,
         totalXAmount: p.totalXAmount,
         totalYAmount: p.totalYAmount,
+        feeX: p.feeX,
+        feeY: p.feeY,
       }));
       
       const snapshot = this.valueTracker.takeSnapshot(

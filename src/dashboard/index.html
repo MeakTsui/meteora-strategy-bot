@@ -179,10 +179,15 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- 仓位分布 -->
       <div class="card">
-        <h3 class="text-lg font-semibold mb-4">
-          <i class="fas fa-pie-chart mr-2 text-blue-600"></i>
-          仓位分布
-        </h3>
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-semibold">
+            <i class="fas fa-pie-chart mr-2 text-blue-600"></i>
+            仓位分布
+          </h3>
+          <div id="totalFeeDisplay" class="text-sm text-amber-600 font-medium">
+            💰 总未领取: $0.00
+          </div>
+        </div>
         <div id="positionsList" class="space-y-3">
           <p class="text-gray-500 text-center py-8">暂无仓位数据</p>
         </div>
@@ -434,9 +439,19 @@
       // 按价格区间从高到低排序（使用价格区间的上限）
       const sortedPositions = [...positions].sort((a, b) => b.priceRange[1] - a.priceRange[1]);
 
+      // 计算并显示总未领取手续费
+      const totalUnclaimedFee = positions.reduce((sum, pos) => sum + (pos.totalFeeUSD || 0), 0);
+      document.getElementById('totalFeeDisplay').textContent = `💰 总未领取: ${formatCurrency(totalUnclaimedFee)}`;
+
       container.innerHTML = sortedPositions.map(pos => {
         const xPercent = pos.valueUSD > 0 ? (pos.xValueUSD / pos.valueUSD * 100) : 0;
         const yPercent = 100 - xPercent;
+        
+        // 格式化手续费显示
+        const feeX = pos.feeX ? (pos.feeX / 1e9).toFixed(6) : '0';
+        const feeY = pos.feeY ? (pos.feeY / 1e6).toFixed(2) : '0';
+        const totalFeeUSD = pos.totalFeeUSD || 0;
+        const hasFee = totalFeeUSD > 0.001;
         
         return `
           <div class="bg-gray-50 rounded-lg p-4">
@@ -455,6 +470,12 @@
             <div class="text-xs text-gray-400 mt-1">
               价格区间: $${pos.priceRange[0].toFixed(2)} - $${pos.priceRange[1].toFixed(2)}
             </div>
+            ${hasFee ? `
+            <div class="text-xs text-amber-600 mt-1 flex items-center">
+              <span class="mr-1">💰</span>
+              <span>未领取: ${feeX} SOL + ${feeY} USDC (${formatCurrency(totalFeeUSD)})</span>
+            </div>
+            ` : ''}
           </div>
         `;
       }).join('');

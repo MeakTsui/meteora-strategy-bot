@@ -15,6 +15,12 @@ export interface PositionValue {
   yValueUSD: number;      // USDC 的 USD 价值
   priceRange: [number, number];  // [minPrice, maxPrice]
   binCount: number;
+  // 未领取手续费
+  feeX: number;           // 未领取 SOL 手续费（原始值）
+  feeY: number;           // 未领取 USDC 手续费（原始值）
+  feeXUSD: number;        // SOL 手续费 USD 价值
+  feeYUSD: number;        // USDC 手续费 USD 价值
+  totalFeeUSD: number;    // 总手续费 USD 价值
 }
 
 export interface ValueSnapshot {
@@ -206,6 +212,8 @@ export class ValueTracker {
       upperBinId: number;
       totalXAmount: number;
       totalYAmount: number;
+      feeX: number;
+      feeY: number;
     }[],
     currentPrice: number,
     tokenXDecimals: number,
@@ -226,6 +234,11 @@ export class ValueTracker {
       const minPrice = Math.min(...prices);
       const maxPrice = Math.max(...prices);
 
+      // 计算手续费 USD 价值
+      const feeXUSD = (pos.feeX / Math.pow(10, tokenXDecimals)) * currentPrice;
+      const feeYUSD = pos.feeY / Math.pow(10, tokenYDecimals);
+      const totalFeeUSD = feeXUSD + feeYUSD;
+
       positionValues.push({
         publicKey: pos.publicKey,
         valueUSD: posValue,
@@ -235,6 +248,11 @@ export class ValueTracker {
         yValueUSD,
         priceRange: [minPrice, maxPrice],
         binCount: pos.binDistribution.length,
+        feeX: pos.feeX,
+        feeY: pos.feeY,
+        feeXUSD,
+        feeYUSD,
+        totalFeeUSD,
       });
 
       totalValueUSD += posValue;
