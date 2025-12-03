@@ -134,6 +134,44 @@ app.get('/api/snapshots', (req: Request, res: Response) => {
   }
 });
 
+/**
+ * 获取已领取手续费历史
+ */
+app.get('/api/claimed-fees', (req: Request, res: Response) => {
+  try {
+    const count = parseInt(req.query.count as string) || 50;
+    const claimedFees = valueTracker.getClaimedFees(count);
+    res.json({
+      success: true,
+      data: claimedFees,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * 获取手续费历史（用于图表）
+ */
+app.get('/api/fee-history', (req: Request, res: Response) => {
+  try {
+    const days = parseInt(req.query.days as string) || 30;
+    const feeHistory = valueTracker.getFeeHistory(days);
+    res.json({
+      success: true,
+      data: feeHistory,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
 // ============================================================================
 // SSE 实时更新
 // ============================================================================
@@ -195,6 +233,8 @@ export function startDashboardServer(): void {
     GET /api/pnl?days=30    - 获取每日 PnL
     GET /api/value-history  - 获取价值历史
     GET /api/operations     - 获取操作历史
+    GET /api/claimed-fees   - 获取已领取手续费历史
+    GET /api/fee-history    - 获取手续费历史（图表）
     GET /api/events         - SSE 实时更新
 
 `);

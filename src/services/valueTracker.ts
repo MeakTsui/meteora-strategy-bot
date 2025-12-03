@@ -66,6 +66,24 @@ export interface TrackerSummary {
   todayOperations: number;
   firstSnapshotDate: string | null;
   lastUpdateTime: number;
+  // 手续费相关
+  totalUnclaimedFeeUSD: number;    // 当前未领取手续费
+  totalClaimedFeeUSD: number;      // 累计已领取手续费
+  todayClaimedFeeUSD: number;      // 今日已领取手续费
+  feeAPY7d: number;                // 7日手续费 APY
+}
+
+export interface ClaimedFeeRecord {
+  id?: number;
+  timestamp: number;
+  positionKey: string;
+  txSignature: string;
+  claimedX: number;           // SOL 原始值
+  claimedY: number;           // USDC 原始值
+  claimedXUSD: number;
+  claimedYUSD: number;
+  totalClaimedUSD: number;
+  priceAtClaim: number;
 }
 
 // ============================================================================
@@ -161,6 +179,25 @@ export class ValueTracker {
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_daily_pnl_date ON daily_pnl(date);
+    `);
+
+    // 已领取手续费记录表
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS claimed_fees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp INTEGER NOT NULL,
+        position_key TEXT NOT NULL,
+        tx_signature TEXT UNIQUE,
+        claimed_x REAL NOT NULL,
+        claimed_y REAL NOT NULL,
+        claimed_x_usd REAL NOT NULL,
+        claimed_y_usd REAL NOT NULL,
+        total_claimed_usd REAL NOT NULL,
+        price_at_claim REAL NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_claimed_fees_timestamp ON claimed_fees(timestamp);
+      CREATE INDEX IF NOT EXISTS idx_claimed_fees_position ON claimed_fees(position_key);
     `);
   }
 
@@ -450,6 +487,22 @@ export class ValueTracker {
       'SELECT COUNT(*) as count FROM operations WHERE timestamp >= ? AND timestamp < ?'
     ).get(todayStart, todayEnd) as { count: number };
 
+    // 手续费统计
+    const totalUnclaimedFeeUSD = positions.reduce((sum: number, p: PositionValue) => sum + (p.totalFeeUSD || 0), 0);
+    
+    const totalClaimedResult = this.db.prepare(
+      'SELECT COALESCE(SUM(total_claimed_usd), 0) as total FROM claimed_fees'
+    ).get() as { total: number };
+    const totalClaimedFeeUSD = totalClaimedResult.total;
+
+    const todayClaimedResult = this.db.prepare(
+      'SELECT COALESCE(SUM(total_claimed_usd), 0) as total FROM claimed_fees WHERE timestamp >= ? AND timestamp < ?'
+    ).get(todayStart, todayEnd) as { total: number };
+    const todayClaimedFeeUSD = todayClaimedResult.total;
+
+    // 手续费 APY（基于 7 天数据）
+    const feeAPY7d = this.calculateFeeAPY(7, currentTotalValue);
+
     return {
       currentTotalValue,
       todayPnL,
@@ -462,6 +515,10 @@ export class ValueTracker {
       todayOperations: todayOpsResult.count,
       firstSnapshotDate: firstRecord?.date || null,
       lastUpdateTime: latestSnapshot?.timestamp || 0,
+      totalUnclaimedFeeUSD,
+      totalClaimedFeeUSD,
+      todayClaimedFeeUSD,
+      feeAPY7d,
     };
   }
 
@@ -548,6 +605,144 @@ export class ValueTracker {
       timestamp: row.timestamp,
       value: row.total_value_usd,
     }));
+  }
+
+  // ============================================================================
+  // 手续费相关方法
+  // ============================================================================
+
+  /**
+   * 记录已领取的手续费
+   */
+  recordClaimedFee(
+    positionKey: string,
+    txSignature: string,
+    claimedX: number,
+    claimedY: number,
+    currentPrice: number,
+    tokenXDecimals: number = 9,
+    tokenYDecimals: number = 6
+  ): ClaimedFeeRecord {
+    const timestamp = Date.now();
+    const claimedXUSD = (claimedX / Math.pow(10, tokenXDecimals)) * currentPrice;
+    const claimedYUSD = claimedY / Math.pow(10, tokenYDecimals);
+    const totalClaimedUSD = claimedXUSD + claimedYUSD;
+
+    this.db.prepare(`
+      INSERT INTO claimed_fees (
+        timestamp, position_key, tx_signature,
+        claimed_x, claimed_y, claimed_x_usd, claimed_y_usd,
+        total_claimed_usd, price_at_claim
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      timestamp, positionKey, txSignature,
+      claimedX, claimedY, claimedXUSD, claimedYUSD,
+      totalClaimedUSD, currentPrice
+    );
+
+    console.log(`[ValueTracker] 记录手续费领取: ${totalClaimedUSD.toFixed(4)} USD (${(claimedX / 1e9).toFixed(6)} SOL + ${(claimedY / 1e6).toFixed(2)} USDC)`);
+
+    return {
+      timestamp,
+      positionKey,
+      txSignature,
+      claimedX,
+      claimedY,
+      claimedXUSD,
+      claimedYUSD,
+      totalClaimedUSD,
+      priceAtClaim: currentPrice,
+    };
+  }
+
+  /**
+   * 获取已领取手续费历史
+   */
+  getClaimedFees(count: number = 100): ClaimedFeeRecord[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM claimed_fees ORDER BY timestamp DESC LIMIT ?'
+    ).all(count) as any[];
+
+    return rows.map(row => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      positionKey: row.position_key,
+      txSignature: row.tx_signature,
+      claimedX: row.claimed_x,
+      claimedY: row.claimed_y,
+      claimedXUSD: row.claimed_x_usd,
+      claimedYUSD: row.claimed_y_usd,
+      totalClaimedUSD: row.total_claimed_usd,
+      priceAtClaim: row.price_at_claim,
+    }));
+  }
+
+  /**
+   * 获取指定时间范围内的已领取手续费总额
+   */
+  getClaimedFeesInRange(startTime: number, endTime: number): number {
+    const result = this.db.prepare(
+      'SELECT COALESCE(SUM(total_claimed_usd), 0) as total FROM claimed_fees WHERE timestamp >= ? AND timestamp < ?'
+    ).get(startTime, endTime) as { total: number };
+    return result.total;
+  }
+
+  /**
+   * 计算手续费 APY
+   */
+  private calculateFeeAPY(days: number, currentTotalValue: number): number {
+    if (currentTotalValue <= 0) return 0;
+
+    const now = Date.now();
+    const startTime = now - days * 24 * 60 * 60 * 1000;
+    
+    // 获取时间范围内的已领取手续费
+    const claimedFees = this.getClaimedFeesInRange(startTime, now);
+    
+    // 获取当前未领取手续费
+    const positions = this.getLatestPositions();
+    const unclaimedFees = positions.reduce((sum: number, p: PositionValue) => sum + (p.totalFeeUSD || 0), 0);
+    
+    // 总手续费收益 = 已领取 + 未领取
+    const totalFees = claimedFees + unclaimedFees;
+    
+    if (totalFees <= 0) return 0;
+
+    // 年化收益率 = (收益 / 本金) * (365 / 天数) * 100
+    const apy = (totalFees / currentTotalValue) * (365 / days) * 100;
+    
+    // 限制最大值
+    return Math.min(apy, 9999);
+  }
+
+  /**
+   * 获取手续费历史（用于图表）
+   */
+  getFeeHistory(days: number = 30): { date: string; claimed: number; unclaimed: number }[] {
+    const result: { date: string; claimed: number; unclaimed: number }[] = [];
+    const now = new Date();
+    
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date(now);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      
+      const dayStart = new Date(dateStr).getTime();
+      const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+      
+      // 当日领取的手续费
+      const claimedResult = this.db.prepare(
+        'SELECT COALESCE(SUM(total_claimed_usd), 0) as total FROM claimed_fees WHERE timestamp >= ? AND timestamp < ?'
+      ).get(dayStart, dayEnd) as { total: number };
+      
+      result.push({
+        date: dateStr,
+        claimed: claimedResult.total,
+        unclaimed: 0, // 历史未领取数据需要从快照中获取，这里简化处理
+      });
+    }
+    
+    return result;
   }
 
   /**

@@ -22,6 +22,11 @@ const CONFIG = {
   
   // 是否启用详细日志
   VERBOSE: process.env.VERBOSE === "true",
+
+  // 自动领取手续费配置
+  CLAIM_FEE_ENABLED: process.env.CLAIM_FEE_ENABLED !== "false",
+  CLAIM_FEE_THRESHOLD_USD: parseFloat(process.env.CLAIM_FEE_THRESHOLD_USD || "5"),
+  CLAIM_FEE_CHECK_HOUR: parseInt(process.env.CLAIM_FEE_CHECK_HOUR || "8"),
 };
 
 // ============================================================================
@@ -588,6 +593,118 @@ class BidAskRebalancer {
     }
   }
 
+  // ============================================================================
+  // 手续费领取
+  // ============================================================================
+
+  /**
+   * 检查并领取手续费
+   */
+  async checkAndClaimFees(): Promise<void> {
+    if (!CONFIG.CLAIM_FEE_ENABLED) {
+      return;
+    }
+
+    try {
+      log("💰 检查未领取手续费...");
+      
+      if (!this.dlmmPool) {
+        await this.initialize();
+      }
+
+      const positions = await this.getPositions();
+      const activeBin = await this.dlmmPool!.getActiveBin();
+      const currentPrice = parseFloat(activeBin.pricePerToken);
+
+      for (const position of positions) {
+        // 计算未领取手续费 USD 价值
+        const feeXUSD = (position.feeX / Math.pow(10, this.tokenXDecimals)) * currentPrice;
+        const feeYUSD = position.feeY / Math.pow(10, this.tokenYDecimals);
+        const totalFeeUSD = feeXUSD + feeYUSD;
+
+        if (totalFeeUSD < CONFIG.CLAIM_FEE_THRESHOLD_USD) {
+          if (CONFIG.VERBOSE) {
+            log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未领取手续费 $${totalFeeUSD.toFixed(4)} 未达阈值 $${CONFIG.CLAIM_FEE_THRESHOLD_USD}`);
+          }
+          continue;
+        }
+
+        log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未领取手续费 $${totalFeeUSD.toFixed(4)} >= 阈值，开始领取...`);
+
+        try {
+          // 获取完整的仓位数据用于 claim
+          const { userPositions } = await this.dlmmPool!.getPositionsByUserAndLbPair(this.wallet.publicKey);
+          const lbPosition = userPositions.find(p => p.publicKey.equals(position.publicKey));
+          
+          if (!lbPosition) {
+            log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未找到完整仓位数据`, "warn");
+            continue;
+          }
+
+          // 调用 SDK 领取手续费
+          const claimTx = await this.dlmmPool!.claimSwapFee({
+            owner: this.wallet.publicKey,
+            position: lbPosition,
+          });
+
+          const claimTxs = Array.isArray(claimTx) ? claimTx : [claimTx];
+          let lastSig = '';
+          
+          for (const tx of claimTxs) {
+            addPriorityFee(tx);
+            const sig = await sendAndConfirmTransaction(this.connection, tx, [this.wallet], {
+              skipPreflight: false,
+              preflightCommitment: "confirmed",
+            });
+            lastSig = sig;
+            log(`✅ 手续费领取交易: ${sig}`, "success");
+          }
+
+          // 记录到数据库
+          this.valueTracker.recordClaimedFee(
+            position.publicKey.toBase58(),
+            lastSig,
+            position.feeX,
+            position.feeY,
+            currentPrice,
+            this.tokenXDecimals,
+            this.tokenYDecimals
+          );
+
+        } catch (claimError) {
+          log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 领取手续费失败: ${claimError instanceof Error ? claimError.message : String(claimError)}`, "error");
+        }
+
+        // 每次领取后等待一下，避免 RPC 限制
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+    } catch (error) {
+      log(`检查手续费失败: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  }
+
+  /**
+   * 检查是否到达每日领取时间
+   */
+  private lastClaimCheckDate: string = '';
+  
+  private shouldCheckClaimFees(): boolean {
+    if (!CONFIG.CLAIM_FEE_ENABLED) return false;
+    
+    const now = new Date();
+    const currentHour = now.getHours();
+    const today = now.toISOString().split('T')[0];
+    
+    // 只在指定小时检查，且每天只检查一次
+    if (currentHour === CONFIG.CLAIM_FEE_CHECK_HOUR && this.lastClaimCheckDate !== today) {
+      this.lastClaimCheckDate = today;
+      return true;
+    }
+    
+    return false;
+  }
+
   /**
    * 启动监控循环
    */
@@ -602,6 +719,9 @@ class BidAskRebalancer {
 
     log("═".repeat(60));
     log("🚀 Bid-Ask 重新平衡器已启动");
+    if (CONFIG.CLAIM_FEE_ENABLED) {
+      log(`💰 自动领取手续费已启用 (阈值: $${CONFIG.CLAIM_FEE_THRESHOLD_USD}, 检查时间: ${CONFIG.CLAIM_FEE_CHECK_HOUR}:00)`);
+    }
     log("═".repeat(60));
 
     // 立即执行一次检查
@@ -610,6 +730,11 @@ class BidAskRebalancer {
     // 设置定时检查
     const intervalId = setInterval(async () => {
       if (this.isRunning) {
+        // 检查是否需要领取手续费
+        if (this.shouldCheckClaimFees()) {
+          await this.checkAndClaimFees();
+        }
+        
         await this.checkAndRebalance();
       }
     }, CONFIG.MONITOR_INTERVAL_MS);
