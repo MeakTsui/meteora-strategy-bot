@@ -598,7 +598,7 @@ class BidAskRebalancer {
   // ============================================================================
 
   /**
-   * 检查并领取手续费
+   * 检查并领取手续费（所有仓位总手续费超过阈值时领取全部）
    */
   async checkAndClaimFees(): Promise<void> {
     if (!CONFIG.CLAIM_FEE_ENABLED) {
@@ -616,31 +616,52 @@ class BidAskRebalancer {
       const activeBin = await this.dlmmPool!.getActiveBin();
       const currentPrice = parseFloat(activeBin.pricePerToken);
 
+      // 计算所有仓位的总手续费
+      let totalFeeX = 0;
+      let totalFeeY = 0;
       for (const position of positions) {
-        // 计算未领取手续费 USD 价值
-        const feeXUSD = (position.feeX / Math.pow(10, this.tokenXDecimals)) * currentPrice;
-        const feeYUSD = position.feeY / Math.pow(10, this.tokenYDecimals);
-        const totalFeeUSD = feeXUSD + feeYUSD;
+        totalFeeX += position.feeX;
+        totalFeeY += position.feeY;
+      }
 
-        if (totalFeeUSD < CONFIG.CLAIM_FEE_THRESHOLD_USD) {
-          if (CONFIG.VERBOSE) {
-            log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未领取手续费 $${totalFeeUSD.toFixed(4)} 未达阈值 $${CONFIG.CLAIM_FEE_THRESHOLD_USD}`);
-          }
+      const totalFeeXUSD = (totalFeeX / Math.pow(10, this.tokenXDecimals)) * currentPrice;
+      const totalFeeYUSD = totalFeeY / Math.pow(10, this.tokenYDecimals);
+      const totalFeeUSD = totalFeeXUSD + totalFeeYUSD;
+
+      log(`总未领取手续费: $${totalFeeUSD.toFixed(4)} (${(totalFeeX / 1e9).toFixed(6)} SOL + ${(totalFeeY / 1e6).toFixed(2)} USDC)`);
+
+      // 检查总手续费是否达到阈值
+      if (totalFeeUSD < CONFIG.CLAIM_FEE_THRESHOLD_USD) {
+        log(`总手续费 $${totalFeeUSD.toFixed(4)} 未达阈值 $${CONFIG.CLAIM_FEE_THRESHOLD_USD}，跳过领取`);
+        return;
+      }
+
+      log(`总手续费 $${totalFeeUSD.toFixed(4)} >= 阈值 $${CONFIG.CLAIM_FEE_THRESHOLD_USD}，开始领取所有仓位手续费...`);
+
+      // 获取完整的仓位数据
+      const { userPositions } = await this.dlmmPool!.getPositionsByUserAndLbPair(this.wallet.publicKey);
+
+      // 领取所有仓位的手续费
+      for (const position of positions) {
+        // 跳过没有手续费的仓位
+        if (position.feeX === 0 && position.feeY === 0) {
           continue;
         }
 
-        log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未领取手续费 $${totalFeeUSD.toFixed(4)} >= 阈值，开始领取...`);
+        const lbPosition = userPositions.find(p => p.publicKey.equals(position.publicKey));
+        
+        if (!lbPosition) {
+          log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未找到完整仓位数据`, "warn");
+          continue;
+        }
+
+        const posFeeXUSD = (position.feeX / Math.pow(10, this.tokenXDecimals)) * currentPrice;
+        const posFeeYUSD = position.feeY / Math.pow(10, this.tokenYDecimals);
+        const posFeeUSD = posFeeXUSD + posFeeYUSD;
+
+        log(`领取仓位 ${position.publicKey.toBase58().slice(0, 8)}... 手续费 $${posFeeUSD.toFixed(4)}`);
 
         try {
-          // 获取完整的仓位数据用于 claim
-          const { userPositions } = await this.dlmmPool!.getPositionsByUserAndLbPair(this.wallet.publicKey);
-          const lbPosition = userPositions.find(p => p.publicKey.equals(position.publicKey));
-          
-          if (!lbPosition) {
-            log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未找到完整仓位数据`, "warn");
-            continue;
-          }
-
           // 调用 SDK 领取手续费
           const claimTx = await this.dlmmPool!.claimSwapFee({
             owner: this.wallet.publicKey,
@@ -678,6 +699,8 @@ class BidAskRebalancer {
         // 每次领取后等待一下，避免 RPC 限制
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
+
+      log(`✅ 所有仓位手续费领取完成`, "success");
 
     } catch (error) {
       log(`检查手续费失败: ${error instanceof Error ? error.message : String(error)}`, "error");
@@ -764,7 +787,7 @@ async function main() {
   console.log(`
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║                     Meteora DLMM Bid-Ask Rebalancer                          ║
-║                         自动重新平衡策略脚本                                    ║
+║                         自动重新平衡策略脚本                                 ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 `);
 
