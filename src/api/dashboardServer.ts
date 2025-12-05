@@ -1,6 +1,10 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import dotenv from 'dotenv';
 import { getValueTracker } from '../services/valueTracker';
+
+// 加载环境变量
+dotenv.config();
 
 const app = express();
 const PORT = parseInt(process.env.DASHBOARD_PORT || '3000');
