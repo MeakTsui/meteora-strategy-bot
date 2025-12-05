@@ -4,6 +4,7 @@ import bs58 from "bs58";
 import dotenv from "dotenv";
 import BN from "bn.js";
 import { getValueTracker, ValueTracker } from "../services/valueTracker";
+import { getKeyManager } from "../utils/keyManager";
 
 dotenv.config();
 
@@ -155,21 +156,40 @@ class BidAskRebalancer {
   private tokenXDecimals: number = 9;
   private tokenYDecimals: number = 6;
 
-  constructor(poolAddress: string) {
+  constructor(poolAddress: string, wallet: Keypair) {
     this.connection = new Connection(CONFIG.RPC_URL, "confirmed");
-    
-    const walletSecret = process.env.WALLET_PRIVATE_KEY || process.env.WALLET_MNEMONIC;
-    if (!walletSecret) {
-      throw new Error("请在 .env 文件中配置 WALLET_PRIVATE_KEY 或 WALLET_MNEMONIC");
-    }
-    
-    this.wallet = createWalletFromSecret(walletSecret);
+    this.wallet = wallet;
     this.poolAddress = poolAddress;
     this.valueTracker = getValueTracker();
     
     log(`钱包地址: ${this.wallet.publicKey.toBase58()}`);
     log(`池地址: ${poolAddress}`);
     log(`监控间隔: ${CONFIG.MONITOR_INTERVAL_MS / 1000} 秒`);
+  }
+
+  /**
+   * 创建 BidAskRebalancer 实例（异步工厂方法）
+   */
+  static async create(poolAddress: string): Promise<BidAskRebalancer> {
+    const keyManager = getKeyManager();
+    const encryptedKeyPath = process.env.ENCRYPTED_KEY_PATH;
+    
+    let wallet: Keypair;
+    
+    if (encryptedKeyPath) {
+      // 使用加密密钥文件
+      wallet = await keyManager.loadWallet(encryptedKeyPath);
+    } else {
+      // 回退到环境变量（兼容旧方式）
+      const walletSecret = process.env.WALLET_PRIVATE_KEY || process.env.WALLET_MNEMONIC;
+      if (!walletSecret) {
+        throw new Error("请配置 ENCRYPTED_KEY_PATH 或 WALLET_PRIVATE_KEY/WALLET_MNEMONIC");
+      }
+      console.log('⚠️  警告：使用环境变量中的私钥（不推荐用于生产环境）');
+      wallet = createWalletFromSecret(walletSecret);
+    }
+    
+    return new BidAskRebalancer(poolAddress, wallet);
   }
 
   /**
@@ -794,7 +814,8 @@ async function main() {
   // 从命令行参数获取池地址
   const poolAddress = process.argv[2] || "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6";
 
-  const rebalancer = new BidAskRebalancer(poolAddress);
+  // 使用工厂方法创建实例（支持加密密钥）
+  const rebalancer = await BidAskRebalancer.create(poolAddress);
   await rebalancer.start();
 }
 
