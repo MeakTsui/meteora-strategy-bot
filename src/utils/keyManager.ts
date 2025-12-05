@@ -155,46 +155,52 @@ export class KeyManager {
    * 从终端读取密码（隐藏输入）
    */
   async promptPassword(prompt: string = '请输入密码: '): Promise<string> {
-    return new Promise((resolve) => {
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-
-      // 隐藏输入
-      if (process.stdin.isTTY) {
-        process.stdout.write(prompt);
-        const stdin = process.stdin;
+    // 尝试使用 raw mode 隐藏输入
+    return new Promise((resolve, reject) => {
+      process.stdout.write(prompt);
+      
+      const stdin = process.stdin;
+      let password = '';
+      
+      // 检查是否支持 raw mode
+      if (typeof stdin.setRawMode === 'function') {
         stdin.setRawMode(true);
         stdin.resume();
         stdin.setEncoding('utf8');
 
-        let password = '';
         const onData = (char: string) => {
           if (char === '\n' || char === '\r' || char === '\u0004') {
             stdin.setRawMode(false);
             stdin.removeListener('data', onData);
-            rl.close();
+            stdin.pause();
             process.stdout.write('\n');
             resolve(password);
           } else if (char === '\u0003') {
             // Ctrl+C
-            process.exit();
+            stdin.setRawMode(false);
+            process.stdout.write('\n');
+            process.exit(0);
           } else if (char === '\u007F' || char === '\b') {
             // Backspace
             if (password.length > 0) {
               password = password.slice(0, -1);
               process.stdout.write('\b \b');
             }
-          } else {
+          } else if (char.charCodeAt(0) >= 32) {
+            // 只接受可打印字符
             password += char;
             process.stdout.write('*');
           }
         };
         stdin.on('data', onData);
       } else {
-        // 非 TTY 环境（如管道输入）
-        rl.question(prompt, (answer) => {
+        // 回退：使用 readline（密码会显示，但至少能工作）
+        console.warn('\n⚠️  警告：当前终端不支持隐藏输入，密码将可见');
+        const rl = readline.createInterface({
+          input: stdin,
+          output: process.stdout,
+        });
+        rl.question('', (answer) => {
           rl.close();
           resolve(answer);
         });
