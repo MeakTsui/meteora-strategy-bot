@@ -21,6 +21,21 @@ export interface PositionValue {
   feeXUSD: number;        // SOL 手续费 USD 价值
   feeYUSD: number;        // USDC 手续费 USD 价值
   totalFeeUSD: number;    // 总手续费 USD 价值
+  // 买卖均价
+  positionType: 'bid' | 'ask' | 'mixed';  // 仓位类型
+  solRatio: number;                        // SOL 占比 (0-1)
+  currentAvgPrice: number;                 // 当前状态的加权均价
+  lastBidPrice: number | null;             // 上次全 USDC 时的买入均价
+  lastAskPrice: number | null;             // 上次全 SOL 时的卖出均价
+}
+
+export interface PositionPriceRecord {
+  id?: number;
+  positionKey: string;
+  timestamp: number;
+  priceType: 'bid' | 'ask';
+  avgPrice: number;
+  amount: number;          // USDC 或 SOL 数量
 }
 
 export interface ValueSnapshot {
@@ -199,6 +214,21 @@ export class ValueTracker {
       CREATE INDEX IF NOT EXISTS idx_claimed_fees_timestamp ON claimed_fees(timestamp);
       CREATE INDEX IF NOT EXISTS idx_claimed_fees_position ON claimed_fees(position_key);
     `);
+
+    // 仓位价格历史表（记录买入/卖出均价）
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS position_price_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        position_key TEXT NOT NULL,
+        timestamp INTEGER NOT NULL,
+        price_type TEXT NOT NULL,
+        avg_price REAL NOT NULL,
+        amount REAL NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE INDEX IF NOT EXISTS idx_position_price_key ON position_price_history(position_key);
+      CREATE INDEX IF NOT EXISTS idx_position_price_type ON position_price_history(position_key, price_type);
+    `);
   }
 
   /**
@@ -235,6 +265,123 @@ export class ValueTracker {
       xValueUSD,
       yValueUSD,
     };
+  }
+
+  /**
+   * 计算加权平均价格
+   */
+  private calculateWeightedAvgPrice(
+    binDistribution: { binId: number; price: number; xAmount: number; yAmount: number }[],
+    tokenXDecimals: number,
+    tokenYDecimals: number,
+    solRatio: number
+  ): { avgPrice: number; positionType: 'bid' | 'ask' | 'mixed' } {
+    let totalValue = 0;
+    let totalSOL = 0;
+
+    for (const bin of binDistribution) {
+      const xAmount = bin.xAmount / Math.pow(10, tokenXDecimals);
+      const yAmount = bin.yAmount / Math.pow(10, tokenYDecimals);
+      
+      // SOL 部分的价值
+      totalValue += xAmount * bin.price;
+      totalSOL += xAmount;
+      
+      // USDC 部分可以买多少 SOL
+      if (bin.price > 0) {
+        totalValue += yAmount;
+        totalSOL += yAmount / bin.price;
+      }
+    }
+
+    const avgPrice = totalSOL > 0 ? totalValue / totalSOL : 0;
+    
+    // 判断仓位类型
+    let positionType: 'bid' | 'ask' | 'mixed';
+    if (solRatio >= 0.95) {
+      positionType = 'ask';  // 全是 SOL，待卖出
+    } else if (solRatio <= 0.05) {
+      positionType = 'bid';  // 全是 USDC，待买入
+    } else {
+      positionType = 'mixed';
+    }
+
+    return { avgPrice, positionType };
+  }
+
+  /**
+   * 获取仓位的历史买卖均价
+   */
+  private getLastPrices(positionKey: string): { lastBidPrice: number | null; lastAskPrice: number | null } {
+    const bidRecord = this.db.prepare(
+      'SELECT avg_price FROM position_price_history WHERE position_key = ? AND price_type = ? ORDER BY timestamp DESC LIMIT 1'
+    ).get(positionKey, 'bid') as { avg_price: number } | undefined;
+
+    const askRecord = this.db.prepare(
+      'SELECT avg_price FROM position_price_history WHERE position_key = ? AND price_type = ? ORDER BY timestamp DESC LIMIT 1'
+    ).get(positionKey, 'ask') as { avg_price: number } | undefined;
+
+    return {
+      lastBidPrice: bidRecord?.avg_price ?? null,
+      lastAskPrice: askRecord?.avg_price ?? null,
+    };
+  }
+
+  /**
+   * 用于追踪每个仓位的上次 SOL 占比
+   */
+  private lastSolRatios: Map<string, number> = new Map();
+
+  /**
+   * 检测状态变化并记录价格
+   */
+  private checkAndRecordPriceChange(
+    positionKey: string,
+    solRatio: number,
+    avgPrice: number,
+    xValueUSD: number,
+    yValueUSD: number
+  ): void {
+    const lastRatio = this.lastSolRatios.get(positionKey);
+    
+    // 首次记录或状态变化时记录
+    if (lastRatio !== undefined) {
+      // 从非全 SOL 变成全 SOL → 记录卖出均价
+      if (solRatio >= 0.95 && lastRatio < 0.95) {
+        this.recordPositionPrice(positionKey, 'ask', avgPrice, xValueUSD);
+        console.log(`[ValueTracker] 仓位 ${positionKey.slice(0, 8)}... 记录卖出均价: $${avgPrice.toFixed(4)}`);
+      }
+      
+      // 从非全 USDC 变成全 USDC → 记录买入均价
+      if (solRatio <= 0.05 && lastRatio > 0.05) {
+        this.recordPositionPrice(positionKey, 'bid', avgPrice, yValueUSD);
+        console.log(`[ValueTracker] 仓位 ${positionKey.slice(0, 8)}... 记录买入均价: $${avgPrice.toFixed(4)}`);
+      }
+    } else {
+      // 首次记录，根据当前状态记录
+      if (solRatio >= 0.95) {
+        this.recordPositionPrice(positionKey, 'ask', avgPrice, xValueUSD);
+      } else if (solRatio <= 0.05) {
+        this.recordPositionPrice(positionKey, 'bid', avgPrice, yValueUSD);
+      }
+    }
+
+    this.lastSolRatios.set(positionKey, solRatio);
+  }
+
+  /**
+   * 记录仓位价格到数据库
+   */
+  private recordPositionPrice(
+    positionKey: string,
+    priceType: 'bid' | 'ask',
+    avgPrice: number,
+    amount: number
+  ): void {
+    this.db.prepare(`
+      INSERT INTO position_price_history (position_key, timestamp, price_type, avg_price, amount)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(positionKey, Date.now(), priceType, avgPrice, amount);
   }
 
   /**
@@ -276,6 +423,21 @@ export class ValueTracker {
       const feeYUSD = pos.feeY / Math.pow(10, tokenYDecimals);
       const totalFeeUSD = feeXUSD + feeYUSD;
 
+      // 计算 SOL 占比和加权均价
+      const solRatio = posValue > 0 ? xValueUSD / posValue : 0;
+      const { avgPrice, positionType } = this.calculateWeightedAvgPrice(
+        pos.binDistribution,
+        tokenXDecimals,
+        tokenYDecimals,
+        solRatio
+      );
+
+      // 获取历史记录的买卖均价
+      const { lastBidPrice, lastAskPrice } = this.getLastPrices(pos.publicKey);
+
+      // 检测状态变化并记录
+      this.checkAndRecordPriceChange(pos.publicKey, solRatio, avgPrice, xValueUSD, yValueUSD);
+
       positionValues.push({
         publicKey: pos.publicKey,
         valueUSD: posValue,
@@ -290,6 +452,11 @@ export class ValueTracker {
         feeXUSD,
         feeYUSD,
         totalFeeUSD,
+        positionType,
+        solRatio,
+        currentAvgPrice: avgPrice,
+        lastBidPrice,
+        lastAskPrice,
       });
 
       totalValueUSD += posValue;

@@ -486,11 +486,33 @@
         const feeY = pos.feeY ? (pos.feeY / 1e6).toFixed(2) : '0';
         const totalFeeUSD = pos.totalFeeUSD || 0;
         const hasFee = totalFeeUSD > 0.001;
+
+        // 仓位类型和均价
+        const posType = pos.positionType || 'mixed';
+        const typeLabel = posType === 'bid' ? 'Bid' : posType === 'ask' ? 'Ask' : 'Mixed';
+        const typeColor = posType === 'bid' ? 'bg-green-100 text-green-700' : posType === 'ask' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700';
+        
+        // 买卖均价
+        const bidPrice = pos.lastBidPrice;
+        const askPrice = pos.lastAskPrice;
+        const currentAvg = pos.currentAvgPrice;
+        const hasPrices = bidPrice || askPrice;
+        
+        // 计算价差
+        let spreadInfo = '';
+        if (bidPrice && askPrice) {
+          const spread = askPrice - bidPrice;
+          const spreadPercent = (spread / bidPrice * 100).toFixed(2);
+          spreadInfo = `<span class="text-purple-600 ml-2">价差: $${spread.toFixed(2)} (${spreadPercent}%)</span>`;
+        }
         
         return `
           <div class="bg-gray-50 rounded-lg p-4">
             <div class="flex justify-between items-center mb-2">
-              <span class="font-mono text-sm text-gray-600">${pos.publicKey.slice(0, 8)}...</span>
+              <div class="flex items-center space-x-2">
+                <span class="font-mono text-sm text-gray-600">${pos.publicKey.slice(0, 8)}...</span>
+                <span class="px-2 py-0.5 rounded text-xs font-medium ${typeColor}">${typeLabel}</span>
+              </div>
               <span class="font-semibold">${formatCurrency(pos.valueUSD)}</span>
             </div>
             <div class="flex h-2 rounded-full overflow-hidden bg-gray-200">
@@ -504,6 +526,13 @@
             <div class="text-xs text-gray-400 mt-1">
               价格区间: $${pos.priceRange[0].toFixed(2)} - $${pos.priceRange[1].toFixed(2)}
             </div>
+            ${hasPrices ? `
+            <div class="text-xs mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              ${bidPrice ? `<span class="text-green-600">📉 买入均价: $${bidPrice.toFixed(2)}</span>` : '<span class="text-gray-400">📉 买入均价: -</span>'}
+              ${askPrice ? `<span class="text-red-600">📈 卖出均价: $${askPrice.toFixed(2)}</span>` : '<span class="text-gray-400">📈 卖出均价: -</span>'}
+              ${spreadInfo}
+            </div>
+            ` : ''}
             ${hasFee ? `
             <div class="text-xs text-amber-600 mt-1 flex items-center">
               <span class="mr-1">💰</span>
