@@ -222,10 +222,6 @@ export class KeyManager {
     
     this.keypair = Keypair.fromSecretKey(privateKey);
     
-    // 清理密码变量
-    // @ts-ignore
-    password = undefined;
-    
     console.log('✅ 钱包解密成功\n');
     
     return this.keypair;
