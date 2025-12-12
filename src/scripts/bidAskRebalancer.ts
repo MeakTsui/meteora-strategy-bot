@@ -28,6 +28,8 @@ const CONFIG = {
   CLAIM_FEE_ENABLED: process.env.CLAIM_FEE_ENABLED !== "false",
   CLAIM_FEE_THRESHOLD_USD: parseFloat(process.env.CLAIM_FEE_THRESHOLD_USD || "5"),
   CLAIM_FEE_CHECK_HOUR: parseInt(process.env.CLAIM_FEE_CHECK_HOUR || "8"),
+  // 单个仓位最小领取阈值（USD），低于此值不领取，节省 gas
+  CLAIM_FEE_MIN_POSITION_USD: parseFloat(process.env.CLAIM_FEE_MIN_POSITION_USD || "0.1"),
 };
 
 // ============================================================================
@@ -663,8 +665,16 @@ class BidAskRebalancer {
 
       // 领取所有仓位的手续费
       for (const position of positions) {
-        // 跳过没有手续费的仓位
-        if (position.feeX === 0 && position.feeY === 0) {
+        // 计算该仓位的手续费 USD 价值
+        const posFeeXUSD = (position.feeX / Math.pow(10, this.tokenXDecimals)) * currentPrice;
+        const posFeeYUSD = position.feeY / Math.pow(10, this.tokenYDecimals);
+        const posFeeUSD = posFeeXUSD + posFeeYUSD;
+
+        // 跳过手续费小于最小阈值的仓位（节省 gas）
+        if (posFeeUSD < CONFIG.CLAIM_FEE_MIN_POSITION_USD) {
+          if (CONFIG.VERBOSE) {
+            log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 手续费 $${posFeeUSD.toFixed(4)} < $${CONFIG.CLAIM_FEE_MIN_POSITION_USD}，跳过`);
+          }
           continue;
         }
 
@@ -674,10 +684,6 @@ class BidAskRebalancer {
           log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 未找到完整仓位数据`, "warn");
           continue;
         }
-
-        const posFeeXUSD = (position.feeX / Math.pow(10, this.tokenXDecimals)) * currentPrice;
-        const posFeeYUSD = position.feeY / Math.pow(10, this.tokenYDecimals);
-        const posFeeUSD = posFeeXUSD + posFeeYUSD;
 
         log(`领取仓位 ${position.publicKey.toBase58().slice(0, 8)}... 手续费 $${posFeeUSD.toFixed(4)}`);
 
