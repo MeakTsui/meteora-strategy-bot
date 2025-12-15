@@ -1,0 +1,43 @@
+name = "meteora-dlmm-rebalancer"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# 环境变量
+[vars]
+# DLMM 池地址 (SOL-USDC)
+POOL_ADDRESS = "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6"
+# 优先费 (microLamports)
+PRIORITY_FEE = "1000"
+# 详细日志
+VERBOSE = "false"
+# 日志级别
+LOG_LEVEL = "info"
+# 自动领取手续费配置
+CLAIM_FEE_ENABLED = "true"
+CLAIM_FEE_THRESHOLD_USD = "5"
+CLAIM_FEE_CHECK_HOUR = "8"
+CLAIM_FEE_MIN_POSITION_USD = "0.1"
+
+# D1 数据库绑定
+[[d1_databases]]
+binding = "DB"
+database_name = "meteora-bot"
+database_id = "3417b809-f7ef-4235-8eb3-83f752ca72ed"
+
+# KV 命名空间绑定（用于状态缓存）
+[[kv_namespaces]]
+binding = "STATE"
+id = "a26e7bcc2fdf4c0faf1e30e5d2f3e905"
+
+# Cron 触发器 - 每分钟执行一次重新平衡检查
+[triggers]
+crons = ["*/1 * * * *"]
+
+# 生产环境配置
+[env.production]
+vars = { VERBOSE = "false", LOG_LEVEL = "info" }
+
+# Secrets (通过 wrangler secret put 设置):
+# - WALLET_PRIVATE_KEY: 钱包私钥 (Base58 编码)
+# - RPC_URL: Solana RPC 节点 URL

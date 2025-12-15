@@ -1,0 +1,595 @@
+/**
+ * Dashboard HTML 页面
+ * Cloudflare Workers 不支持静态文件服务，所以将 HTML 内联
+ */
+export const dashboardHTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Meteora DLMM Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    .card {
+      @apply bg-white rounded-xl shadow-lg p-6 transition-all duration-300 hover:shadow-xl;
+    }
+    .stat-value {
+      @apply text-3xl font-bold text-gray-800;
+    }
+    .stat-label {
+      @apply text-sm text-gray-500 mt-1;
+    }
+    .positive { @apply text-green-500; }
+    .negative { @apply text-red-500; }
+    .chart-container {
+      position: relative;
+      height: 300px;
+    }
+    .loading {
+      @apply animate-pulse bg-gray-200 rounded;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <!-- Header -->
+  <header class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white py-6 shadow-lg">
+    <div class="container mx-auto px-6">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center space-x-4">
+          <i class="fas fa-chart-line text-3xl"></i>
+          <div>
+            <h1 class="text-2xl font-bold">Meteora DLMM Dashboard</h1>
+            <p class="text-purple-200 text-sm">Bid-Ask Rebalancer 监控面板 (Cloudflare Workers)</p>
+          </div>
+        </div>
+        <div class="flex items-center space-x-4">
+          <span id="lastUpdate" class="text-sm text-purple-200">
+            <i class="fas fa-clock mr-1"></i>
+            更新中...
+          </span>
+          <button onclick="refreshAll()" class="bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-sm">
+            <i class="fas fa-sync-alt mr-1"></i>刷新
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="container mx-auto px-6 py-8">
+    <!-- 核心指标卡片 -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+      <!-- 总资产价值 -->
+      <div class="card">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="stat-label">总资产价值</p>
+            <p id="totalValue" class="stat-value">$0.00</p>
+          </div>
+          <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+            <i class="fas fa-wallet text-purple-600 text-xl"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- 今日 PnL -->
+      <div class="card">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="stat-label">今日 PnL</p>
+            <p id="todayPnL" class="stat-value">$0.00</p>
+            <p id="todayPnLPercent" class="text-sm mt-1">0.00%</p>
+          </div>
+          <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+            <i class="fas fa-chart-bar text-green-600 text-xl"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- 累计 PnL -->
+      <div class="card">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="stat-label">累计 PnL</p>
+            <p id="totalPnL" class="stat-value">$0.00</p>
+            <p id="totalPnLPercent" class="text-sm mt-1">0.00%</p>
+          </div>
+          <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+            <i class="fas fa-coins text-blue-600 text-xl"></i>
+          </div>
+        </div>
+      </div>
+
+      <!-- APY -->
+      <div class="card">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="stat-label">7日 APY</p>
+            <p id="apy7d" class="stat-value">0.00%</p>
+            <p id="apy30d" class="text-sm text-gray-500 mt-1">30日: 0.00%</p>
+          </div>
+          <div class="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center">
+            <i class="fas fa-percentage text-yellow-600 text-xl"></i>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 手续费收益卡片 -->
+    <div class="card mb-8 bg-gradient-to-r from-amber-50 to-yellow-50 border border-amber-200">
+      <div class="flex items-center mb-4">
+        <div class="w-10 h-10 bg-amber-100 rounded-lg flex items-center justify-center mr-3">
+          <i class="fas fa-coins text-amber-600"></i>
+        </div>
+        <h3 class="text-lg font-semibold text-amber-800">💰 手续费收益</h3>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div class="bg-white rounded-lg p-3 shadow-sm">
+          <p class="text-xs text-gray-500 mb-1">未领取</p>
+          <p class="text-lg font-bold text-amber-600" id="unclaimedFee">$0.00</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 shadow-sm">
+          <p class="text-xs text-gray-500 mb-1">已领取</p>
+          <p class="text-lg font-bold text-green-600" id="claimedFee">$0.00</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 shadow-sm">
+          <p class="text-xs text-gray-500 mb-1">今日领取</p>
+          <p class="text-lg font-bold text-blue-600" id="todayClaimedFee">$0.00</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 shadow-sm">
+          <p class="text-xs text-gray-500 mb-1">手续费 APY</p>
+          <p class="text-lg font-bold text-purple-600" id="feeAPY">0.00%</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 次要指标 -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+      <div class="card">
+        <div class="flex items-center space-x-4">
+          <div class="w-10 h-10 bg-indigo-100 rounded-lg flex items-center justify-center">
+            <i class="fas fa-layer-group text-indigo-600"></i>
+          </div>
+          <div>
+            <p class="text-2xl font-bold" id="positionCount">0</p>
+            <p class="text-sm text-gray-500">活跃仓位</p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="flex items-center space-x-4">
+          <div class="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
+            <i class="fas fa-sync text-orange-600"></i>
+          </div>
+          <div>
+            <p class="text-2xl font-bold" id="todayOperations">0</p>
+            <p class="text-sm text-gray-500">今日操作</p>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="flex items-center space-x-4">
+          <div class="w-10 h-10 bg-teal-100 rounded-lg flex items-center justify-center">
+            <i class="fas fa-calendar text-teal-600"></i>
+          </div>
+          <div>
+            <p class="text-sm font-medium" id="trackingSince">-</p>
+            <p class="text-sm text-gray-500">开始追踪</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 图表区域 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+      <!-- 资产价值曲线 -->
+      <div class="card">
+        <h3 class="text-lg font-semibold mb-4">
+          <i class="fas fa-chart-area mr-2 text-purple-600"></i>
+          资产价值走势
+        </h3>
+        <div class="chart-container">
+          <canvas id="valueChart"></canvas>
+        </div>
+      </div>
+
+      <!-- 每日 PnL -->
+      <div class="card">
+        <h3 class="text-lg font-semibold mb-4">
+          <i class="fas fa-chart-bar mr-2 text-green-600"></i>
+          每日 PnL
+        </h3>
+        <div class="chart-container">
+          <canvas id="pnlChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <!-- 仓位分布和操作历史 -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- 仓位分布 -->
+      <div class="card">
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-semibold">
+            <i class="fas fa-pie-chart mr-2 text-blue-600"></i>
+            仓位分布
+          </h3>
+          <div id="totalFeeDisplay" class="text-sm text-amber-600 font-medium">
+            💰 总未领取: $0.00
+          </div>
+        </div>
+        <div id="positionsList" class="space-y-3">
+          <p class="text-gray-500 text-center py-8">暂无仓位数据</p>
+        </div>
+      </div>
+
+      <!-- 操作历史 -->
+      <div class="card">
+        <h3 class="text-lg font-semibold mb-4">
+          <i class="fas fa-history mr-2 text-orange-600"></i>
+          最近操作
+        </h3>
+        <div id="operationsList" class="space-y-2 max-h-80 overflow-y-auto">
+          <p class="text-gray-500 text-center py-8">暂无操作记录</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 手动操作区 -->
+    <div class="card mt-8">
+      <h3 class="text-lg font-semibold mb-4">
+        <i class="fas fa-tools mr-2 text-gray-600"></i>
+        手动操作
+      </h3>
+      <div class="flex flex-wrap gap-4">
+        <button onclick="triggerRebalance()" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition">
+          <i class="fas fa-sync-alt mr-2"></i>触发重新平衡
+        </button>
+        <button onclick="triggerClaimFees()" class="bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg transition">
+          <i class="fas fa-coins mr-2"></i>领取手续费
+        </button>
+      </div>
+      <div id="actionResult" class="mt-4 text-sm hidden"></div>
+    </div>
+  </main>
+
+  <!-- Footer -->
+  <footer class="bg-gray-800 text-gray-400 py-4 mt-8">
+    <div class="container mx-auto px-6 text-center text-sm">
+      Meteora DLMM Bid-Ask Rebalancer Dashboard (Cloudflare Workers)
+    </div>
+  </footer>
+
+  <script>
+    const API_BASE = '';
+    let valueChart = null;
+    let pnlChart = null;
+
+    function formatCurrency(value) {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value);
+    }
+
+    function formatPercent(value) {
+      const sign = value >= 0 ? '+' : '';
+      if (!isFinite(value) || isNaN(value)) return 'N/A';
+      if (Math.abs(value) >= 10000) return \`\${sign}\${(value / 1000).toFixed(1)}K%\`;
+      if (Math.abs(value) >= 1000) return \`\${sign}\${value.toFixed(0)}%\`;
+      if (Math.abs(value) >= 100) return \`\${sign}\${value.toFixed(1)}%\`;
+      return \`\${sign}\${value.toFixed(2)}%\`;
+    }
+
+    function formatTime(timestamp) {
+      return new Date(timestamp).toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    }
+
+    function setPnLStyle(element, value) {
+      element.classList.remove('positive', 'negative');
+      if (value > 0) element.classList.add('positive');
+      else if (value < 0) element.classList.add('negative');
+    }
+
+    async function fetchAPI(endpoint) {
+      try {
+        const response = await fetch(\`\${API_BASE}\${endpoint}\`);
+        const data = await response.json();
+        if (data.success) return data.data;
+        throw new Error(data.error);
+      } catch (error) {
+        console.error(\`API Error (\${endpoint}):\`, error);
+        return null;
+      }
+    }
+
+    async function updateSummary() {
+      const summary = await fetchAPI('/api/summary');
+      if (!summary) return;
+
+      document.getElementById('totalValue').textContent = formatCurrency(summary.currentTotalValue);
+
+      const todayPnLEl = document.getElementById('todayPnL');
+      const todayPnLPercentEl = document.getElementById('todayPnLPercent');
+      todayPnLEl.textContent = formatCurrency(summary.todayPnL);
+      todayPnLPercentEl.textContent = formatPercent(summary.todayPnLPercent);
+      setPnLStyle(todayPnLEl, summary.todayPnL);
+      setPnLStyle(todayPnLPercentEl, summary.todayPnL);
+
+      const totalPnLEl = document.getElementById('totalPnL');
+      const totalPnLPercentEl = document.getElementById('totalPnLPercent');
+      totalPnLEl.textContent = formatCurrency(summary.totalPnL);
+      totalPnLPercentEl.textContent = formatPercent(summary.totalPnLPercent);
+      setPnLStyle(totalPnLEl, summary.totalPnL);
+      setPnLStyle(totalPnLPercentEl, summary.totalPnL);
+
+      const apy7dEl = document.getElementById('apy7d');
+      apy7dEl.textContent = formatPercent(summary.apy7d);
+      setPnLStyle(apy7dEl, summary.apy7d);
+      document.getElementById('apy30d').textContent = \`30日: \${formatPercent(summary.apy30d)}\`;
+
+      document.getElementById('positionCount').textContent = summary.positionCount;
+      document.getElementById('todayOperations').textContent = summary.todayOperations;
+      document.getElementById('trackingSince').textContent = summary.firstSnapshotDate || '-';
+
+      document.getElementById('unclaimedFee').textContent = formatCurrency(summary.totalUnclaimedFeeUSD || 0);
+      document.getElementById('claimedFee').textContent = formatCurrency(summary.totalClaimedFeeUSD || 0);
+      document.getElementById('todayClaimedFee').textContent = formatCurrency(summary.todayClaimedFeeUSD || 0);
+      document.getElementById('feeAPY').textContent = formatPercent(summary.feeAPY7d || 0);
+
+      if (summary.lastUpdateTime) {
+        document.getElementById('lastUpdate').innerHTML = 
+          \`<i class="fas fa-clock mr-1"></i>\${formatTime(summary.lastUpdateTime)}\`;
+      }
+    }
+
+    async function updateValueChart() {
+      const history = await fetchAPI('/api/value-history?hours=24');
+      if (!history || history.length === 0) return;
+
+      const labels = history.map(h => formatTime(h.timestamp));
+      const values = history.map(h => h.value);
+
+      if (valueChart) {
+        valueChart.data.labels = labels;
+        valueChart.data.datasets[0].data = values;
+        valueChart.update();
+      } else {
+        const ctx = document.getElementById('valueChart').getContext('2d');
+        valueChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: '总价值 (USD)',
+              data: values,
+              borderColor: 'rgb(147, 51, 234)',
+              backgroundColor: 'rgba(147, 51, 234, 0.1)',
+              fill: true,
+              tension: 0.4,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { display: true, grid: { display: false }, ticks: { maxTicksLimit: 6 } },
+              y: { display: true, grid: { color: 'rgba(0,0,0,0.05)' } }
+            }
+          }
+        });
+      }
+    }
+
+    async function updatePnLChart() {
+      const pnlData = await fetchAPI('/api/pnl?days=14');
+      if (!pnlData || pnlData.length === 0) return;
+
+      const labels = pnlData.map(d => d.date.slice(5));
+      const values = pnlData.map(d => d.pnl);
+      const colors = values.map(v => v >= 0 ? 'rgba(34, 197, 94, 0.8)' : 'rgba(239, 68, 68, 0.8)');
+
+      if (pnlChart) {
+        pnlChart.data.labels = labels;
+        pnlChart.data.datasets[0].data = values;
+        pnlChart.data.datasets[0].backgroundColor = colors;
+        pnlChart.update();
+      } else {
+        const ctx = document.getElementById('pnlChart').getContext('2d');
+        pnlChart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'PnL (USD)',
+              data: values,
+              backgroundColor: colors,
+              borderRadius: 4,
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { display: true, grid: { display: false } },
+              y: { display: true, grid: { color: 'rgba(0,0,0,0.05)' } }
+            }
+          }
+        });
+      }
+    }
+
+    async function updatePositions() {
+      const positions = await fetchAPI('/api/positions');
+      const container = document.getElementById('positionsList');
+      
+      if (!positions || positions.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-center py-8">暂无仓位数据</p>';
+        return;
+      }
+
+      const sortedPositions = [...positions].sort((a, b) => b.priceRange[1] - a.priceRange[1]);
+      const totalUnclaimedFee = positions.reduce((sum, pos) => sum + (pos.totalFeeUSD || 0), 0);
+      document.getElementById('totalFeeDisplay').textContent = \`💰 总未领取: \${formatCurrency(totalUnclaimedFee)}\`;
+
+      container.innerHTML = sortedPositions.map(pos => {
+        const xPercent = pos.valueUSD > 0 ? (pos.xValueUSD / pos.valueUSD * 100) : 0;
+        const yPercent = 100 - xPercent;
+        const feeX = pos.feeX ? (pos.feeX / 1e9).toFixed(6) : '0';
+        const feeY = pos.feeY ? (pos.feeY / 1e6).toFixed(2) : '0';
+        const totalFeeUSD = pos.totalFeeUSD || 0;
+        const hasFee = totalFeeUSD > 0.001;
+        const posType = pos.positionType || 'mixed';
+        const typeLabel = posType === 'bid' ? 'Bid' : posType === 'ask' ? 'Ask' : 'Mixed';
+        const typeColor = posType === 'bid' ? 'bg-green-100 text-green-700' : posType === 'ask' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-700';
+        const bidPrice = pos.lastBidPrice;
+        const askPrice = pos.lastAskPrice;
+        const hasPrices = bidPrice || askPrice;
+        let spreadInfo = '';
+        if (bidPrice && askPrice) {
+          const spread = askPrice - bidPrice;
+          const spreadPercent = (spread / bidPrice * 100).toFixed(2);
+          spreadInfo = \`<span class="text-purple-600 ml-2">价差: $\${spread.toFixed(2)} (\${spreadPercent}%)</span>\`;
+        }
+        
+        return \`
+          <div class="bg-gray-50 rounded-lg p-4">
+            <div class="flex justify-between items-center mb-2">
+              <div class="flex items-center space-x-2">
+                <span class="font-mono text-sm text-gray-600">\${pos.publicKey.slice(0, 8)}...</span>
+                <span class="px-2 py-0.5 rounded text-xs font-medium \${typeColor}">\${typeLabel}</span>
+              </div>
+              <span class="font-semibold">\${formatCurrency(pos.valueUSD)}</span>
+            </div>
+            <div class="flex h-2 rounded-full overflow-hidden bg-gray-200">
+              <div class="bg-green-500" style="width: \${yPercent}%" title="USDC: \${formatCurrency(pos.yValueUSD)}"></div>
+              <div class="bg-blue-500" style="width: \${xPercent}%" title="SOL: \${formatCurrency(pos.xValueUSD)}"></div>
+            </div>
+            <div class="flex justify-between text-xs text-gray-500 mt-1">
+              <span>USDC: \${yPercent.toFixed(1)}%</span>
+              <span>SOL: \${xPercent.toFixed(1)}%</span>
+            </div>
+            <div class="text-xs text-gray-400 mt-1">
+              价格区间: $\${pos.priceRange[0].toFixed(2)} - $\${pos.priceRange[1].toFixed(2)}
+            </div>
+            \${hasPrices ? \`
+            <div class="text-xs mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+              \${bidPrice ? \`<span class="text-green-600">📉 买入均价: $\${bidPrice.toFixed(2)}</span>\` : '<span class="text-gray-400">📉 买入均价: -</span>'}
+              \${askPrice ? \`<span class="text-red-600">📈 卖出均价: $\${askPrice.toFixed(2)}</span>\` : '<span class="text-gray-400">📈 卖出均价: -</span>'}
+              \${spreadInfo}
+            </div>
+            \` : ''}
+            \${hasFee ? \`
+            <div class="text-xs text-amber-600 mt-1 flex items-center">
+              <span class="mr-1">💰</span>
+              <span>未领取: \${feeX} SOL + \${feeY} USDC (\${formatCurrency(totalFeeUSD)})</span>
+            </div>
+            \` : ''}
+          </div>
+        \`;
+      }).join('');
+    }
+
+    async function updateOperations() {
+      const operations = await fetchAPI('/api/operations?count=20');
+      const container = document.getElementById('operationsList');
+      
+      if (!operations || operations.length === 0) {
+        container.innerHTML = '<p class="text-gray-500 text-center py-8">暂无操作记录</p>';
+        return;
+      }
+
+      container.innerHTML = operations.map(op => {
+        const actionColor = op.action === 'bid' ? 'text-green-600 bg-green-100' : 'text-red-600 bg-red-100';
+        const actionText = op.action === 'bid' ? 'BID' : 'ASK';
+        const pnl = op.afterValueUSD - op.beforeValueUSD;
+        
+        return \`
+          <div class="flex items-center justify-between py-2 border-b border-gray-100">
+            <div class="flex items-center space-x-3">
+              <span class="px-2 py-1 rounded text-xs font-semibold \${actionColor}">\${actionText}</span>
+              <div>
+                <p class="text-sm font-mono text-gray-600">\${op.positionKey.slice(0, 8)}...</p>
+                <p class="text-xs text-gray-400">\${formatTime(op.timestamp)}</p>
+              </div>
+            </div>
+            <div class="text-right">
+              <p class="text-sm \${pnl >= 0 ? 'positive' : 'negative'}">\${formatCurrency(pnl)}</p>
+            </div>
+          </div>
+        \`;
+      }).join('');
+    }
+
+    async function triggerRebalance() {
+      const resultEl = document.getElementById('actionResult');
+      resultEl.className = 'mt-4 text-sm bg-blue-100 text-blue-800 p-3 rounded';
+      resultEl.textContent = '正在执行重新平衡检查...';
+      resultEl.classList.remove('hidden');
+      
+      try {
+        const response = await fetch('/api/rebalance', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+          resultEl.className = 'mt-4 text-sm bg-green-100 text-green-800 p-3 rounded';
+          resultEl.textContent = \`✅ 检查完成: \${data.data.checked} 个仓位, \${data.data.rebalanced} 个重新平衡\`;
+          await refreshAll();
+        } else {
+          throw new Error(data.error);
+        }
+      } catch (error) {
+        resultEl.className = 'mt-4 text-sm bg-red-100 text-red-800 p-3 rounded';
+        resultEl.textContent = \`❌ 错误: \${error.message}\`;
+      }
+    }
+
+    async function triggerClaimFees() {
+      const resultEl = document.getElementById('actionResult');
+      resultEl.className = 'mt-4 text-sm bg-blue-100 text-blue-800 p-3 rounded';
+      resultEl.textContent = '正在领取手续费...';
+      resultEl.classList.remove('hidden');
+      
+      try {
+        const response = await fetch('/api/claim-fees', { method: 'POST' });
+        const data = await response.json();
+        if (data.success) {
+          resultEl.className = 'mt-4 text-sm bg-green-100 text-green-800 p-3 rounded';
+          resultEl.textContent = \`✅ 领取完成: \${data.data.claimed} 个仓位, 总计 \${formatCurrency(data.data.totalUSD)}\`;
+          await refreshAll();
+        } else {
+          throw new Error(data.error);
+        }
+      } catch (error) {
+        resultEl.className = 'mt-4 text-sm bg-red-100 text-red-800 p-3 rounded';
+        resultEl.textContent = \`❌ 错误: \${error.message}\`;
+      }
+    }
+
+    async function refreshAll() {
+      await Promise.all([
+        updateSummary(),
+        updateValueChart(),
+        updatePnLChart(),
+        updatePositions(),
+        updateOperations(),
+      ]);
+    }
+
+    // 定期刷新
+    setInterval(refreshAll, 30000);
+
+    // 启动
+    refreshAll();
+  </script>
+</body>
+</html>`;
