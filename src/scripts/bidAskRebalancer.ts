@@ -30,6 +30,9 @@ const CONFIG = {
   CLAIM_FEE_CHECK_HOUR: parseInt(process.env.CLAIM_FEE_CHECK_HOUR || "8"),
   // 单个仓位最小领取阈值（USD），低于此值不领取，节省 gas
   CLAIM_FEE_MIN_POSITION_USD: parseFloat(process.env.CLAIM_FEE_MIN_POSITION_USD || "0.1"),
+  
+  // 价格偏离阈值（百分比），价格需要超出区间边界此百分比才触发rebalance
+  REBALANCE_PRICE_DEVIATION_PERCENT: parseFloat(process.env.REBALANCE_PRICE_DEVIATION_PERCENT || "0.5"),
 };
 
 // ============================================================================
@@ -338,18 +341,38 @@ class BidAskRebalancer {
    * 触发条件：
    * 1. 价格上穿区间（X=0, 全是 USDC）且 Y 分布是递增的（高价多）→ 需要调整为 Bid（低价多）
    * 2. 价格下穿区间（Y=0, 全是 SOL）且 X 分布是递减的（低价多）→ 需要调整为 Ask（高价多）
+   * 
+   * 新增：价格偏离阈值检查
+   * - 价格需要超出区间边界一定百分比才触发rebalance，避免价格在边界附近波动时频繁触发
    */
-  checkRebalanceNeeded(position: PositionState): RebalanceAction | null {
+  checkRebalanceNeeded(position: PositionState, currentPrice: number): RebalanceAction | null {
     const { totalXAmount, totalYAmount, publicKey, binDistribution } = position;
     const positionId = publicKey.toBase58().slice(0, 8);
     
+    // 计算仓位的上下边界价格
+    const upperBinPrice = binDistribution[binDistribution.length - 1]?.price || 0;
+    const lowerBinPrice = binDistribution[0]?.price || 0;
+    
+    // 计算价格偏离阈值
+    const deviationThreshold = CONFIG.REBALANCE_PRICE_DEVIATION_PERCENT / 100;
+    
     // 情况1：价格上穿区间，全部变成 USDC（X=0）
     if (totalXAmount === 0 && totalYAmount > 0) {
+      // 检查价格是否超出上边界 + 阈值
+      const priceThreshold = upperBinPrice * (1 + deviationThreshold);
+      
+      if (currentPrice <= priceThreshold) {
+        if (CONFIG.VERBOSE) {
+          log(`仓位 ${positionId}... 价格 $${currentPrice.toFixed(4)} 未超过阈值 $${priceThreshold.toFixed(4)} (上边界 $${upperBinPrice.toFixed(4)} + ${CONFIG.REBALANCE_PRICE_DEVIATION_PERCENT}%)，暂不触发`);
+        }
+        return null;
+      }
+      
       // 检查 Y 的分布是否为递增（Ask 策略的结果：高价卖得多）
       const isAskResult = this.isAscendingDistribution(binDistribution, 'y');
       
       if (isAskResult) {
-        log(`仓位 ${positionId}... 价格上穿，USDC 分布递增（Ask 结果），需要重新部署 Bid 策略`);
+        log(`仓位 ${positionId}... 价格 $${currentPrice.toFixed(4)} 超过阈值 $${priceThreshold.toFixed(4)}，USDC 分布递增（Ask 结果），需要重新部署 Bid 策略`);
         return {
           position,
           action: "bid",
@@ -365,11 +388,21 @@ class BidAskRebalancer {
     
     // 情况2：价格下穿区间，全部变成 SOL（Y=0）
     if (totalYAmount === 0 && totalXAmount > 0) {
+      // 检查价格是否低于下边界 - 阈值
+      const priceThreshold = lowerBinPrice * (1 - deviationThreshold);
+      
+      if (currentPrice >= priceThreshold) {
+        if (CONFIG.VERBOSE) {
+          log(`仓位 ${positionId}... 价格 $${currentPrice.toFixed(4)} 未低于阈值 $${priceThreshold.toFixed(4)} (下边界 $${lowerBinPrice.toFixed(4)} - ${CONFIG.REBALANCE_PRICE_DEVIATION_PERCENT}%)，暂不触发`);
+        }
+        return null;
+      }
+      
       // 检查 X 的分布是否为递减（Bid 策略的结果：低价买得多）
       const isBidResult = this.isDescendingDistribution(binDistribution, 'x');
       
       if (isBidResult) {
-        log(`仓位 ${positionId}... 价格下穿，SOL 分布递减（Bid 结果），需要重新部署 Ask 策略`);
+        log(`仓位 ${positionId}... 价格 $${currentPrice.toFixed(4)} 低于阈值 $${priceThreshold.toFixed(4)}，SOL 分布递减（Bid 结果），需要重新部署 Ask 策略`);
         return {
           position,
           action: "ask",
@@ -545,7 +578,7 @@ class BidAskRebalancer {
       let rebalanceCount = 0;
 
       for (const position of positions) {
-        const action = this.checkRebalanceNeeded(position);
+        const action = this.checkRebalanceNeeded(position, currentPrice);
         
         if (action) {
           rebalanceCount++;
