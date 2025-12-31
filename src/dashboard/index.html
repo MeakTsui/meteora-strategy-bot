@@ -121,10 +121,15 @@
         </div>
         <h3 class="text-lg font-semibold text-amber-800">💰 手续费收益</h3>
       </div>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div class="bg-white rounded-lg p-3 shadow-sm">
           <p class="text-xs text-gray-500 mb-1">未领取</p>
           <p class="text-lg font-bold text-amber-600" id="unclaimedFee">$0.00</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 shadow-sm">
+          <p class="text-xs text-gray-500 mb-1">待复投</p>
+          <p class="text-lg font-bold text-orange-600" id="accumulatedFee">$0.00</p>
+          <p class="text-xs text-gray-400 mt-1" id="accumulatedFeeDetail">-</p>
         </div>
         <div class="bg-white rounded-lg p-3 shadow-sm">
           <p class="text-xs text-gray-500 mb-1">已领取</p>
@@ -358,6 +363,13 @@
       document.getElementById('claimedFee').textContent = formatCurrency(summary.totalClaimedFeeUSD || 0);
       document.getElementById('todayClaimedFee').textContent = formatCurrency(summary.todayClaimedFeeUSD || 0);
       document.getElementById('feeAPY').textContent = formatPercent(summary.feeAPY7d || 0);
+      
+      // 累积待复投手续费
+      document.getElementById('accumulatedFee').textContent = formatCurrency(summary.totalAccumulatedFeeUSD || 0);
+      const accFeeX = (summary.accumulatedFeeX || 0) / 1e9;
+      const accFeeY = (summary.accumulatedFeeY || 0) / 1e6;
+      document.getElementById('accumulatedFeeDetail').textContent = 
+        `${accFeeX.toFixed(6)} SOL + ${accFeeY.toFixed(2)} USDC`;
 
       // 更新时间
       if (summary.lastUpdateTime) {

@@ -86,6 +86,10 @@ export interface TrackerSummary {
   totalClaimedFeeUSD: number;      // 累计已领取手续费
   todayClaimedFeeUSD: number;      // 今日已领取手续费
   feeAPY7d: number;                // 7日手续费 APY
+  // 累积待复投手续费
+  totalAccumulatedFeeUSD: number;  // 已领取但未复投的手续费总额
+  accumulatedFeeX: number;         // 累积的 SOL 手续费（原始值）
+  accumulatedFeeY: number;         // 累积的 USDC 手续费（原始值）
 }
 
 export interface ClaimedFeeRecord {
@@ -228,6 +232,16 @@ export class ValueTracker {
       );
       CREATE INDEX IF NOT EXISTS idx_position_price_key ON position_price_history(position_key);
       CREATE INDEX IF NOT EXISTS idx_position_price_type ON position_price_history(position_key, price_type);
+    `);
+
+    // 累积手续费表（记录已领取但未复投的手续费）
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS accumulated_fees (
+        position_key TEXT PRIMARY KEY,
+        fee_x REAL NOT NULL DEFAULT 0,
+        fee_y REAL NOT NULL DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      );
     `);
   }
 
@@ -670,6 +684,21 @@ export class ValueTracker {
     // 手续费 APY（基于 7 天数据）
     const feeAPY7d = this.calculateFeeAPY(7, currentTotalValue);
 
+    // 累积待复投手续费
+    const allAccumulatedFees = this.getAllAccumulatedFees();
+    let accumulatedFeeX = 0;
+    let accumulatedFeeY = 0;
+    for (const [_, fees] of allAccumulatedFees) {
+      accumulatedFeeX += fees.feeX;
+      accumulatedFeeY += fees.feeY;
+    }
+    
+    // 计算累积手续费的 USD 价值（使用当前价格）
+    const currentPrice = latestSnapshot?.current_price || 0;
+    const accumulatedFeeXUSD = (accumulatedFeeX / 1e9) * currentPrice;
+    const accumulatedFeeYUSD = accumulatedFeeY / 1e6;
+    const totalAccumulatedFeeUSD = accumulatedFeeXUSD + accumulatedFeeYUSD;
+
     return {
       currentTotalValue,
       todayPnL,
@@ -686,6 +715,9 @@ export class ValueTracker {
       totalClaimedFeeUSD,
       todayClaimedFeeUSD,
       feeAPY7d,
+      totalAccumulatedFeeUSD,
+      accumulatedFeeX,
+      accumulatedFeeY,
     };
   }
 
@@ -909,6 +941,77 @@ export class ValueTracker {
       });
     }
     
+    return result;
+  }
+
+  // ============================================================================
+  // 累积手续费相关方法
+  // ============================================================================
+
+  /**
+   * 累积手续费到仓位
+   */
+  accumulateFees(positionKey: string, feeX: number, feeY: number): void {
+    const existing = this.db.prepare(
+      'SELECT fee_x, fee_y FROM accumulated_fees WHERE position_key = ?'
+    ).get(positionKey) as { fee_x: number; fee_y: number } | undefined;
+
+    if (existing) {
+      // 更新现有记录
+      this.db.prepare(`
+        UPDATE accumulated_fees 
+        SET fee_x = fee_x + ?, fee_y = fee_y + ?, updated_at = CURRENT_TIMESTAMP
+        WHERE position_key = ?
+      `).run(feeX, feeY, positionKey);
+    } else {
+      // 插入新记录
+      this.db.prepare(`
+        INSERT INTO accumulated_fees (position_key, fee_x, fee_y)
+        VALUES (?, ?, ?)
+      `).run(positionKey, feeX, feeY);
+    }
+
+    console.log(`[ValueTracker] 累积手续费: ${positionKey.slice(0, 8)}... +${(feeX / 1e9).toFixed(6)} SOL +${(feeY / 1e6).toFixed(2)} USDC`);
+  }
+
+  /**
+   * 获取仓位的累积手续费
+   */
+  getAccumulatedFees(positionKey: string): { feeX: number; feeY: number } {
+    const result = this.db.prepare(
+      'SELECT fee_x, fee_y FROM accumulated_fees WHERE position_key = ?'
+    ).get(positionKey) as { fee_x: number; fee_y: number } | undefined;
+
+    if (!result) {
+      return { feeX: 0, feeY: 0 };
+    }
+
+    return { feeX: result.fee_x, feeY: result.fee_y };
+  }
+
+  /**
+   * 清除仓位的累积手续费（复投后调用）
+   */
+  clearAccumulatedFees(positionKey: string): void {
+    this.db.prepare(
+      'DELETE FROM accumulated_fees WHERE position_key = ?'
+    ).run(positionKey);
+
+    console.log(`[ValueTracker] 清除累积手续费: ${positionKey.slice(0, 8)}...`);
+  }
+
+  /**
+   * 获取所有累积手续费
+   */
+  getAllAccumulatedFees(): Map<string, { feeX: number; feeY: number }> {
+    const rows = this.db.prepare(
+      'SELECT position_key, fee_x, fee_y FROM accumulated_fees'
+    ).all() as Array<{ position_key: string; fee_x: number; fee_y: number }>;
+
+    const result = new Map<string, { feeX: number; feeY: number }>();
+    for (const row of rows) {
+      result.set(row.position_key, { feeX: row.fee_x, feeY: row.fee_y });
+    }
     return result;
   }
 

@@ -33,6 +33,9 @@ const CONFIG = {
   
   // 价格偏离阈值（百分比），价格需要超出区间边界此百分比才触发rebalance
   REBALANCE_PRICE_DEVIATION_PERCENT: parseFloat(process.env.REBALANCE_PRICE_DEVIATION_PERCENT || "0.5"),
+  
+  // 是否启用手续费自动复投（在 rebalance 时复投），默认 true
+  CLAIM_FEE_AUTO_REINVEST: process.env.CLAIM_FEE_AUTO_REINVEST !== "false",
 };
 
 // ============================================================================
@@ -486,16 +489,34 @@ class BidAskRebalancer {
       let totalXAmount: BN;
       let totalYAmount: BN;
 
+      // 获取累积的手续费
+      const posKey = position.publicKey.toBase58();
+      const accFees = this.valueTracker.getAccumulatedFees(posKey);
+
       if (actionType === "bid") {
         // Bid 策略：用 USDC 买入，价格越低买越多
         totalXAmount = new BN(0);
         totalYAmount = amount;
-        log(`添加 USDC: ${amount.toNumber() / 1e6} USDC`);
+        
+        // 如果有累积的 USDC 手续费，一起添加
+        if (CONFIG.CLAIM_FEE_AUTO_REINVEST && accFees.feeY > 0) {
+          totalYAmount = totalYAmount.add(new BN(Math.floor(accFees.feeY)));
+          log(`💰 复投累积的 USDC 手续费: ${(accFees.feeY / 1e6).toFixed(2)} USDC`);
+        }
+        
+        log(`添加 USDC: ${totalYAmount.toNumber() / 1e6} USDC`);
       } else {
         // Ask 策略：用 SOL 卖出，价格越高卖越多
         totalXAmount = amount;
         totalYAmount = new BN(0);
-        log(`添加 SOL: ${amount.toNumber() / 1e9} SOL`);
+        
+        // 如果有累积的 SOL 手续费，一起添加
+        if (CONFIG.CLAIM_FEE_AUTO_REINVEST && accFees.feeX > 0) {
+          totalXAmount = totalXAmount.add(new BN(Math.floor(accFees.feeX)));
+          log(`💰 复投累积的 SOL 手续费: ${(accFees.feeX / 1e9).toFixed(6)} SOL`);
+        }
+        
+        log(`添加 SOL: ${totalXAmount.toNumber() / 1e9} SOL`);
       }
 
       const addLiquidityTx = await this.dlmmPool.addLiquidityByStrategy({
@@ -522,6 +543,12 @@ class BidAskRebalancer {
       }
 
       log(`重新平衡完成！`, "success");
+      
+      // 清除该仓位的累积手续费（已复投）
+      if (CONFIG.CLAIM_FEE_AUTO_REINVEST && (accFees.feeX > 0 || accFees.feeY > 0)) {
+        this.valueTracker.clearAccumulatedFees(posKey);
+        log(`✅ 已清除仓位累积手续费记录`);
+      }
       
       // 更新仓位状态
       this.positionStates.set(positionKey.toBase58(), {
@@ -750,6 +777,16 @@ class BidAskRebalancer {
             this.tokenXDecimals,
             this.tokenYDecimals
           );
+
+          // 如果启用自动复投，累积手续费到数据库
+          if (CONFIG.CLAIM_FEE_AUTO_REINVEST) {
+            this.valueTracker.accumulateFees(
+              position.publicKey.toBase58(),
+              position.feeX,
+              position.feeY
+            );
+            log(`📝 已累积手续费，等待下次 rebalance 时复投`);
+          }
 
         } catch (claimError) {
           log(`仓位 ${position.publicKey.toBase58().slice(0, 8)}... 领取手续费失败: ${claimError instanceof Error ? claimError.message : String(claimError)}`, "error");
