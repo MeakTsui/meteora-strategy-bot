@@ -1016,6 +1016,42 @@ export class ValueTracker {
   }
 
   /**
+   * 清除所有仓位的 SOL 手续费（保留 USDC）
+   */
+  clearAllAccumulatedFeeX(): void {
+    this.db.prepare(`
+      UPDATE accumulated_fees 
+      SET fee_x = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE fee_x > 0
+    `).run();
+
+    console.log(`[ValueTracker] 已清除所有仓位的 SOL 累积手续费`);
+  }
+
+  /**
+   * 清除所有仓位的 USDC 手续费（保留 SOL）
+   */
+  clearAllAccumulatedFeeY(): void {
+    this.db.prepare(`
+      UPDATE accumulated_fees 
+      SET fee_y = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE fee_y > 0
+    `).run();
+
+    console.log(`[ValueTracker] 已清除所有仓位的 USDC 累积手续费`);
+  }
+
+  /**
+   * 清除所有仓位中 fee_x 和 fee_y 都为 0 的记录
+   */
+  cleanupEmptyAccumulatedFees(): void {
+    this.db.prepare(`
+      DELETE FROM accumulated_fees 
+      WHERE fee_x = 0 AND fee_y = 0
+    `).run();
+  }
+
+  /**
    * 关闭数据库连接
    */
   close(): void {

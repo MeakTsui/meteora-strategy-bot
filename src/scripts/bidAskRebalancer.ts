@@ -489,34 +489,43 @@ class BidAskRebalancer {
       let totalXAmount: BN;
       let totalYAmount: BN;
 
-      // 获取累积的手续费
-      const posKey = position.publicKey.toBase58();
-      const accFees = this.valueTracker.getAccumulatedFees(posKey);
+      // 获取所有累积的手续费
+      const allAccFees = this.valueTracker.getAllAccumulatedFees();
+      let totalAccFeeX = 0;
+      let totalAccFeeY = 0;
+      
+      if (CONFIG.CLAIM_FEE_AUTO_REINVEST && allAccFees.size > 0) {
+        for (const [posKey, fees] of allAccFees) {
+          totalAccFeeX += fees.feeX;
+          totalAccFeeY += fees.feeY;
+        }
+        log(`📊 所有仓位累积手续费: ${(totalAccFeeX / 1e9).toFixed(6)} SOL + ${(totalAccFeeY / 1e6).toFixed(2)} USDC`);
+      }
 
       if (actionType === "bid") {
         // Bid 策略：用 USDC 买入，价格越低买越多
         totalXAmount = new BN(0);
         totalYAmount = amount;
         
-        // 如果有累积的 USDC 手续费，一起添加
-        if (CONFIG.CLAIM_FEE_AUTO_REINVEST && accFees.feeY > 0) {
-          totalYAmount = totalYAmount.add(new BN(Math.floor(accFees.feeY)));
-          log(`💰 复投累积的 USDC 手续费: ${(accFees.feeY / 1e6).toFixed(2)} USDC`);
+        // 将所有累积的 USDC 手续费一起添加
+        if (CONFIG.CLAIM_FEE_AUTO_REINVEST && totalAccFeeY > 0) {
+          totalYAmount = totalYAmount.add(new BN(Math.floor(totalAccFeeY)));
+          log(`💰 复投所有累积的 USDC 手续费: ${(totalAccFeeY / 1e6).toFixed(2)} USDC`);
         }
         
-        log(`添加 USDC: ${totalYAmount.toNumber() / 1e6} USDC`);
+        log(`添加 USDC: ${totalYAmount.toNumber() / 1e6} USDC (含复投)`);
       } else {
         // Ask 策略：用 SOL 卖出，价格越高卖越多
         totalXAmount = amount;
         totalYAmount = new BN(0);
         
-        // 如果有累积的 SOL 手续费，一起添加
-        if (CONFIG.CLAIM_FEE_AUTO_REINVEST && accFees.feeX > 0) {
-          totalXAmount = totalXAmount.add(new BN(Math.floor(accFees.feeX)));
-          log(`💰 复投累积的 SOL 手续费: ${(accFees.feeX / 1e9).toFixed(6)} SOL`);
+        // 将所有累积的 SOL 手续费一起添加
+        if (CONFIG.CLAIM_FEE_AUTO_REINVEST && totalAccFeeX > 0) {
+          totalXAmount = totalXAmount.add(new BN(Math.floor(totalAccFeeX)));
+          log(`💰 复投所有累积的 SOL 手续费: ${(totalAccFeeX / 1e9).toFixed(6)} SOL`);
         }
         
-        log(`添加 SOL: ${totalXAmount.toNumber() / 1e9} SOL`);
+        log(`添加 SOL: ${totalXAmount.toNumber() / 1e9} SOL (含复投)`);
       }
 
       const addLiquidityTx = await this.dlmmPool.addLiquidityByStrategy({
@@ -544,10 +553,20 @@ class BidAskRebalancer {
 
       log(`重新平衡完成！`, "success");
       
-      // 清除该仓位的累积手续费（已复投）
-      if (CONFIG.CLAIM_FEE_AUTO_REINVEST && (accFees.feeX > 0 || accFees.feeY > 0)) {
-        this.valueTracker.clearAccumulatedFees(posKey);
-        log(`✅ 已清除仓位累积手续费记录`);
+      // 清除所有已复投的累积手续费
+      if (CONFIG.CLAIM_FEE_AUTO_REINVEST && allAccFees.size > 0) {
+        // 根据策略类型清除对应的手续费
+        if (actionType === "bid" && totalAccFeeY > 0) {
+          // Bid 策略复投了 USDC，清除所有仓位的 USDC 手续费
+          this.valueTracker.clearAllAccumulatedFeeY();
+          this.valueTracker.cleanupEmptyAccumulatedFees();
+          log(`✅ 已清除所有仓位的 USDC 累积手续费记录 (${(totalAccFeeY / 1e6).toFixed(2)} USDC)`);
+        } else if (actionType === "ask" && totalAccFeeX > 0) {
+          // Ask 策略复投了 SOL，清除所有仓位的 SOL 手续费
+          this.valueTracker.clearAllAccumulatedFeeX();
+          this.valueTracker.cleanupEmptyAccumulatedFees();
+          log(`✅ 已清除所有仓位的 SOL 累积手续费记录 (${(totalAccFeeX / 1e9).toFixed(6)} SOL)`);
+        }
       }
       
       // 更新仓位状态
