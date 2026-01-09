@@ -82,12 +82,31 @@ app.get('/api/pnl', (req: Request, res: Response) => {
 });
 
 /**
- * 获取价值历史（用于图表）
+ * 获取价值历史（用于图表）- 按小时/分钟级别
  */
 app.get('/api/value-history', (req: Request, res: Response) => {
   try {
     const hours = parseInt(req.query.hours as string) || 24;
     const history = valueTracker.getValueHistory(hours);
+    res.json({
+      success: true,
+      data: history,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * 获取每日价值历史（用于图表）- 按天级别
+ */
+app.get('/api/value-history-daily', (req: Request, res: Response) => {
+  try {
+    const days = parseInt(req.query.days as string) || 30;
+    const history = valueTracker.getDailyValueHistory(days);
     res.json({
       success: true,
       data: history,

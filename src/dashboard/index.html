@@ -187,10 +187,24 @@
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
       <!-- 资产价值曲线 -->
       <div class="card">
-        <h3 class="text-lg font-semibold mb-4">
-          <i class="fas fa-chart-area mr-2 text-purple-600"></i>
-          资产价值走势
-        </h3>
+        <div class="flex justify-between items-center mb-4">
+          <h3 class="text-lg font-semibold">
+            <i class="fas fa-chart-area mr-2 text-purple-600"></i>
+            资产价值走势
+          </h3>
+          <!-- 时间范围切换按钮 -->
+          <div class="flex space-x-2">
+            <button onclick="switchValueChartRange('24h')" id="btn-24h" class="px-3 py-1 text-xs font-medium rounded bg-gray-200 text-gray-700 hover:bg-gray-300 transition">
+              24小时
+            </button>
+            <button onclick="switchValueChartRange('7d')" id="btn-7d" class="px-3 py-1 text-xs font-medium rounded bg-purple-600 text-white hover:bg-purple-700 transition">
+              7天
+            </button>
+            <button onclick="switchValueChartRange('30d')" id="btn-30d" class="px-3 py-1 text-xs font-medium rounded bg-gray-200 text-gray-700 hover:bg-gray-300 transition">
+              30天
+            </button>
+          </div>
+        </div>
         <div class="chart-container">
           <canvas id="valueChart"></canvas>
         </div>
@@ -253,6 +267,7 @@
     const API_BASE = '';
     let valueChart = null;
     let pnlChart = null;
+    let currentValueChartRange = '7d'; // 当前选中的时间范围（默认7天）
 
     // ========================================================================
     // 工具函数
@@ -378,12 +393,41 @@
       }
     }
 
-    async function updateValueChart() {
-      const history = await fetchAPI('/api/value-history?hours=24');
-      if (!history || history.length === 0) return;
+    // 切换资产价值图表的时间范围
+    function switchValueChartRange(range) {
+      currentValueChartRange = range;
+      
+      // 更新按钮样式
+      ['24h', '7d', '30d'].forEach(r => {
+        const btn = document.getElementById(`btn-${r}`);
+        if (r === range) {
+          btn.className = 'px-3 py-1 text-xs font-medium rounded bg-purple-600 text-white hover:bg-purple-700 transition';
+        } else {
+          btn.className = 'px-3 py-1 text-xs font-medium rounded bg-gray-200 text-gray-700 hover:bg-gray-300 transition';
+        }
+      });
+      
+      // 重新加载图表数据
+      updateValueChart();
+    }
 
-      const labels = history.map(h => formatTime(h.timestamp));
-      const values = history.map(h => h.value);
+    async function updateValueChart() {
+      let history, labels, values;
+      
+      if (currentValueChartRange === '24h') {
+        // 按小时模式：使用原有的 API
+        history = await fetchAPI('/api/value-history?hours=24');
+        if (!history || history.length === 0) return;
+        labels = history.map(h => formatTime(h.timestamp));
+        values = history.map(h => h.value);
+      } else {
+        // 按天模式：使用新的 API
+        const days = currentValueChartRange === '7d' ? 7 : 30;
+        history = await fetchAPI(`/api/value-history-daily?days=${days}`);
+        if (!history || history.length === 0) return;
+        labels = history.map(h => h.date); // 使用日期字符串
+        values = history.map(h => h.value);
+      }
 
       if (valueChart) {
         valueChart.data.labels = labels;
@@ -409,12 +453,26 @@
             maintainAspectRatio: false,
             plugins: {
               legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  title: function(context) {
+                    // 按天模式显示日期，按小时模式显示时间
+                    return context[0].label;
+                  },
+                  label: function(context) {
+                    return '价值: $' + context.parsed.y.toFixed(2);
+                  }
+                }
+              }
             },
             scales: {
               x: {
                 display: true,
                 grid: { display: false },
-                ticks: { maxTicksLimit: 6 },
+                ticks: { 
+                  maxTicksLimit: currentValueChartRange === '24h' ? 6 : 10,
+                  autoSkip: true,
+                },
               },
               y: {
                 display: true,

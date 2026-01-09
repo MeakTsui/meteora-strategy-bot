@@ -791,7 +791,7 @@ export class ValueTracker {
   }
 
   /**
-   * 获取价值历史（用于图表）
+   * 获取价值历史（用于图表）- 按小时/分钟级别
    */
   getValueHistory(hours: number = 24): { timestamp: number; value: number }[] {
     const cutoff = Date.now() - hours * 60 * 60 * 1000;
@@ -804,6 +804,28 @@ export class ValueTracker {
       timestamp: row.timestamp,
       value: row.total_value_usd,
     }));
+  }
+
+  /**
+   * 获取每日价值历史（用于图表）- 按天级别
+   * 基于 daily_pnl 表，返回每天的收盘价值
+   */
+  getDailyValueHistory(days: number = 30): { date: string; timestamp: number; value: number; high: number; low: number }[] {
+    const rows = this.db.prepare(
+      'SELECT date, close_value, high_value, low_value FROM daily_pnl ORDER BY date DESC LIMIT ?'
+    ).all(days) as Array<{ date: string; close_value: number; high_value: number; low_value: number }>;
+    
+    return rows.reverse().map(row => {
+      // 将日期字符串转换为时间戳（使用当天结束时间）
+      const dateObj = new Date(row.date + 'T23:59:59');
+      return {
+        date: row.date,
+        timestamp: dateObj.getTime(),
+        value: row.close_value,      // 使用收盘价值
+        high: row.high_value,         // 当天最高价值
+        low: row.low_value,           // 当天最低价值
+      };
+    });
   }
 
   // ============================================================================
