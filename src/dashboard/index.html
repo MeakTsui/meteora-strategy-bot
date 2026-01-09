@@ -26,6 +26,38 @@
     .loading {
       @apply animate-pulse bg-gray-200 rounded;
     }
+    /* Bin 分布柱状图样式 */
+    .bin-chart {
+      display: flex;
+      align-items: flex-end;
+      height: 60px;
+      gap: 1px;
+      background: #f3f4f6;
+      border-radius: 4px;
+      padding: 4px;
+      margin: 8px 0;
+    }
+    .bin-bar {
+      flex: 1;
+      min-width: 2px;
+      border-radius: 2px 2px 0 0;
+      transition: all 0.2s;
+      cursor: pointer;
+      position: relative;
+    }
+    .bin-bar:hover {
+      opacity: 0.8;
+      transform: scaleY(1.05);
+    }
+    .bin-bar.sol {
+      background: #3b82f6;  /* 蓝色 - 与进度条 SOL 一致 */
+    }
+    .bin-bar.usdc {
+      background: #10b981;  /* 绿色 - 与进度条 USDC 一致 */
+    }
+    .bin-bar.mixed {
+      background: #6b7280;  /* 灰色 - 更柔和 */
+    }
   </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
@@ -531,6 +563,41 @@
       }
     }
 
+    // 生成 bin 柱状图 HTML
+    function generateBinChart(binDistribution) {
+      if (!binDistribution || binDistribution.length === 0) return '';
+      
+      // 找出最大值用于归一化高度（将 SOL 转换为 USD 价值）
+      const maxValue = Math.max(...binDistribution.map(bin => {
+        const xVal = bin.xAmount / 1e9;  // SOL 数量
+        const yVal = bin.yAmount / 1e6;  // USDC 数量
+        const xValueUSD = xVal * bin.price;  // SOL 的 USD 价值
+        return xValueUSD + yVal;  // 总 USD 价值
+      }));
+      
+      if (maxValue === 0) return '';
+      
+      return binDistribution.map(bin => {
+        const xVal = bin.xAmount / 1e9;  // SOL 数量
+        const yVal = bin.yAmount / 1e6;  // USDC 数量
+        const xValueUSD = xVal * bin.price;  // SOL 的 USD 价值
+        const totalValueUSD = xValueUSD + yVal;  // 总 USD 价值
+        const height = (totalValueUSD / maxValue * 100).toFixed(1);
+        
+        // 确定 bin 类型
+        let binClass = 'mixed';
+        if (xVal > 0 && yVal === 0) {
+          binClass = 'sol';
+        } else if (yVal > 0 && xVal === 0) {
+          binClass = 'usdc';
+        }
+        
+        const tooltip = `Bin ${bin.binId}\n价格: $${bin.price.toFixed(4)}\nSOL: ${xVal.toFixed(6)} ($${xValueUSD.toFixed(2)})\nUSDC: ${yVal.toFixed(2)}\n总价值: $${totalValueUSD.toFixed(2)}`;
+        
+        return `<div class="bin-bar ${binClass}" style="height: ${height}%" title="${tooltip}"></div>`;
+      }).join('');
+    }
+
     async function updatePositions() {
       const positions = await fetchAPI('/api/positions');
       const container = document.getElementById('positionsList');
@@ -596,6 +663,16 @@
             <div class="text-xs text-gray-400 mt-1">
               价格区间: $${pos.priceRange[0].toFixed(2)} - $${pos.priceRange[1].toFixed(2)}
             </div>
+            ${pos.binDistribution && pos.binDistribution.length > 0 ? `
+            <div class="mt-3">
+              <div class="text-xs text-gray-500 mb-1">
+                Bin 分布 (${pos.binDistribution.length} bins)
+              </div>
+              <div class="bin-chart">
+                ${generateBinChart(pos.binDistribution)}
+              </div>
+            </div>
+            ` : ''}
             ${hasPrices ? `
             <div class="text-xs mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
               ${bidPrice ? `<span class="text-green-600">📉 买入均价: $${bidPrice.toFixed(2)}</span>` : '<span class="text-gray-400">📉 买入均价: -</span>'}

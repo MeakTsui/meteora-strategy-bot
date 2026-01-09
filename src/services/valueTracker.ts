@@ -15,6 +15,13 @@ export interface PositionValue {
   yValueUSD: number;      // USDC 的 USD 价值
   priceRange: [number, number];  // [minPrice, maxPrice]
   binCount: number;
+  // Bin 分布数据（用于前端柱状图显示）
+  binDistribution?: Array<{
+    binId: number;
+    price: number;
+    xAmount: number;  // SOL 原始值
+    yAmount: number;  // USDC 原始值
+  }>;
   // 未领取手续费
   feeX: number;           // 未领取 SOL 手续费（原始值）
   feeY: number;           // 未领取 USDC 手续费（原始值）
@@ -461,6 +468,13 @@ export class ValueTracker {
         yValueUSD,
         priceRange: [minPrice, maxPrice],
         binCount: pos.binDistribution.length,
+        // 保存 bin 分布数据（用于前端柱状图显示）
+        binDistribution: pos.binDistribution.map(bin => ({
+          binId: bin.binId,
+          price: bin.price,
+          xAmount: bin.xAmount,
+          yAmount: bin.yAmount,
+        })),
         feeX: pos.feeX,
         feeY: pos.feeY,
         feeXUSD,
