@@ -906,8 +906,14 @@ async function main() {
 ╚══════════════════════════════════════════════════════════════════════════════╝
 `);
 
-  // 从命令行参数获取池地址
-  const poolAddress = process.argv[2] || "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6";
+  // 从环境变量或命令行参数获取池地址
+  const poolAddress = process.env.POOL_ADDRESS || process.argv[2] || "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6";
+  
+  if (!process.env.POOL_ADDRESS && !process.argv[2]) {
+    log("⚠️  未配置 POOL_ADDRESS，使用默认池地址", "warn");
+  }
+  
+  log(`Pool Address: ${poolAddress}`);
 
   // 使用工厂方法创建实例（支持加密密钥）
   const rebalancer = await BidAskRebalancer.create(poolAddress);
